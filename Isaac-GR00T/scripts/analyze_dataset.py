@@ -362,7 +362,11 @@ Episode Statistics:
         )
 
         if parquet_path.exists():
-            return pd.read_parquet(parquet_path)
+            try:
+                return pd.read_parquet(parquet_path)
+            except Exception as e:
+                print(f"  Warning: Could not read parquet file: {e}")
+                return None
         return None
 
     def visualize_episode_data(self, episode_idx: int = 0):
