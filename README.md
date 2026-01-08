@@ -4,12 +4,30 @@ Analysis and documentation for NVIDIA's Isaac GR00T N1.6 robotics foundation mod
 
 ## Overview
 
-This repository contains comprehensive analysis of the [Isaac GR00T N1.6](https://github.com/NVIDIA/Isaac-GR00T) codebase, including:
+This repository contains:
 
-- Data processing pipeline documentation
-- Input/output specifications
-- Model architecture analysis
-- Quick reference guides
+- **Isaac-GR00T/** - Complete NVIDIA Isaac GR00T N1.6 source code
+- **reports/** - Comprehensive analysis and documentation
+
+## Repository Structure
+
+```
+grootly/
+├── Isaac-GR00T/           # NVIDIA Isaac GR00T N1.6 source
+│   ├── gr00t/             # Main package
+│   │   ├── data/          # Data loading & preprocessing
+│   │   ├── model/         # Model architecture
+│   │   ├── policy/        # Inference interface
+│   │   └── experiment/    # Training scripts
+│   ├── examples/          # Robot-specific configs
+│   ├── getting_started/   # Official documentation
+│   └── scripts/           # Deployment tools
+│
+└── reports/               # Analysis documentation
+    ├── 01_codebase_analysis.md
+    ├── 02_data_flow_quick_reference.md
+    └── 03_io_specifications.md
+```
 
 ## Reports
 
@@ -52,13 +70,15 @@ git clone https://github.com/colpark/grootly.git
 cd grootly
 ```
 
-2. Clone Isaac GR00T (not included in this repo):
+2. Install dependencies:
 ```bash
-git clone https://github.com/NVIDIA/Isaac-GR00T.git
+cd Isaac-GR00T
+pip install -e .
 ```
 
-3. Follow the [official setup guide](https://github.com/NVIDIA/Isaac-GR00T#installation)
+3. See [Isaac-GR00T/README.md](Isaac-GR00T/README.md) for detailed setup instructions.
 
 ## License
 
-Analysis documentation is provided as-is. Isaac GR00T is licensed under [NVIDIA's license](https://github.com/NVIDIA/Isaac-GR00T/blob/main/LICENSE).
+- Analysis documentation (reports/) is provided as-is
+- Isaac GR00T source code is licensed under [NVIDIA's license](Isaac-GR00T/LICENSE)
