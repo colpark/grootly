@@ -1,0 +1,29 @@
+# Cloned repositories (install separately)
+Isaac-GR00T/
+
+# Claude Code artifacts
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.env
+.venv
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
