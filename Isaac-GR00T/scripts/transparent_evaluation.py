@@ -296,30 +296,44 @@ How it's measured:
         step = 0
         success = False
         total_reward = 0
+        n_action_steps = 8  # Execute 8 actions per policy call (same as rollout_policy.py)
 
         print("\n" + "="*70)
         print("EXECUTION LOOP")
+        print(f"(Policy predicts {n_action_steps} actions per call)")
         print("="*70)
 
+        action_chunk = None
+        action_chunk_idx = n_action_steps  # Start at max to trigger first policy call
+
         while not done and step < max_steps:
-            # Get action
-            if self.using_policy:
-                try:
-                    action, action_info = self._get_policy_action(obs)
-                    action_source = "POLICY"
-                except Exception as e:
-                    action = self.env.action_space.sample()
+            # Get new action chunk every n_action_steps
+            if action_chunk_idx >= n_action_steps:
+                if self.using_policy:
+                    try:
+                        action_chunk, action_info = self._get_policy_action(obs)
+                        action_source = "POLICY"
+                        action_chunk_idx = 0
+                    except Exception as e:
+                        action_chunk = None
+                        action_info = {}
+                        action_source = f"RANDOM (policy error: {e})"
+                else:
+                    action_chunk = None
                     action_info = {}
-                    action_source = f"RANDOM (policy error: {e})"
+                    action_source = "RANDOM"
+
+            # Extract current action from chunk or use random
+            if action_chunk is not None:
+                action = self._extract_single_action(action_chunk, action_chunk_idx)
+                action_chunk_idx += 1
             else:
                 action = self.env.action_space.sample()
-                action_info = {}
-                action_source = "RANDOM"
 
             # Log detailed info at intervals
             if step % log_every == 0:
                 print(f"\n{'─'*70}")
-                print(f"STEP {step}")
+                print(f"STEP {step} (action {action_chunk_idx}/{n_action_steps} in chunk)")
                 print(f"{'─'*70}")
 
                 print(f"\n🎯 ACTION SOURCE: {action_source}")
@@ -343,6 +357,7 @@ How it's measured:
             # Log step
             step_log = {
                 "step": step,
+                "action_chunk_idx": action_chunk_idx,
                 "reward": float(reward),
                 "total_reward": float(total_reward),
                 "done": done,
@@ -416,8 +431,13 @@ How it's measured:
             "step_logs": step_logs
         }
 
-    def _get_policy_action(self, obs: Dict) -> Dict:
-        """Get action from policy server."""
+    def _get_policy_action(self, obs: Dict) -> tuple:
+        """Get action chunk from policy server.
+
+        Returns:
+            action_chunk: Dict with action arrays of shape (n_action_steps, dim)
+            info: Additional info from policy
+        """
         # Format observation for policy
         policy_obs = {}
         for key, value in obs.items():
@@ -440,24 +460,32 @@ How it's measured:
                 policy_obs[key] = value
 
         # Get action from policy (returns tuple of (action_dict, info_dict))
-        # Action format: (batch=1, chunk=8, dim) - we need first action from chunk
-        action_chunk, info = self.policy_client.get_action(policy_obs)
+        # Action format: (batch=1, chunk=8, dim)
+        action_chunk_raw, info = self.policy_client.get_action(policy_obs)
 
-        # Extract first action from the chunk, remove batch dimension
-        # Policy returns action chunks with shape (1, 8, dim) for 8 future timesteps
+        # Remove batch dimension, keep action chunk
+        # Shape: (1, 8, dim) -> (8, dim) for each action key
+        action_chunk = {}
+        for key, value in action_chunk_raw.items():
+            if isinstance(value, np.ndarray):
+                if len(value.shape) >= 2:
+                    action_chunk[key] = value[0]  # Remove batch dim: (1, 8, dim) -> (8, dim)
+                else:
+                    action_chunk[key] = value
+            else:
+                action_chunk[key] = value
+
+        return action_chunk, info
+
+    def _extract_single_action(self, action_chunk: Dict, step_idx: int) -> Dict:
+        """Extract a single action from action chunk at given index."""
         action = {}
         for key, value in action_chunk.items():
-            if isinstance(value, np.ndarray):
-                # Remove batch dim [0] and take first timestep [0]
-                # Shape: (1, 8, dim) -> (dim,)
-                if len(value.shape) >= 2:
-                    action[key] = value[0, 0]  # First batch, first timestep
-                else:
-                    action[key] = value
+            if isinstance(value, np.ndarray) and len(value.shape) >= 1:
+                action[key] = value[step_idx]  # (8, dim) -> (dim,)
             else:
                 action[key] = value
-
-        return action, info
+        return action
 
     def _plot_episode_summary(self, step_logs: List[Dict], success: bool):
         """Create visualization of episode."""
