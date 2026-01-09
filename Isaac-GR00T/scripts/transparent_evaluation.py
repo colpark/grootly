@@ -305,13 +305,15 @@ How it's measured:
             # Get action
             if self.using_policy:
                 try:
-                    action = self._get_policy_action(obs)
+                    action, action_info = self._get_policy_action(obs)
                     action_source = "POLICY"
                 except Exception as e:
                     action = self.env.action_space.sample()
+                    action_info = {}
                     action_source = f"RANDOM (policy error: {e})"
             else:
                 action = self.env.action_space.sample()
+                action_info = {}
                 action_source = "RANDOM"
 
             # Log detailed info at intervals
@@ -437,9 +439,9 @@ How it's measured:
             else:
                 policy_obs[key] = value
 
-        # Get action from policy
-        action = self.policy_client.get_action(policy_obs)
-        return action
+        # Get action from policy (returns tuple of (action_dict, info_dict))
+        action, info = self.policy_client.get_action(policy_obs)
+        return action, info
 
     def _plot_episode_summary(self, step_logs: List[Dict], success: bool):
         """Create visualization of episode."""
