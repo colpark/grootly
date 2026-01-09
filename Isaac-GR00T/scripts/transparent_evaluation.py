@@ -15,7 +15,14 @@ Usage:
     # Terminal 2 - Run transparent evaluation
     gr00t/eval/sim/robocasa/robocasa_uv/.venv/bin/python scripts/transparent_evaluation.py \
         --save-dir ./transparent_eval \
-        --max-steps 100
+        --max-steps 100 \
+        --camera-view side
+
+Camera view options:
+    --camera-view side   : Single high-res side view (512px) - recommended, clearest view
+    --camera-view wrist  : Wrist camera view (512px) - good for close-up manipulation
+    --camera-view both   : Side + wrist views side by side
+    --camera-view all    : All 6 cameras (original wide concatenation)
 """
 
 import os
@@ -42,6 +49,143 @@ from gr00t.eval.rollout_policy import (
 from gr00t.eval.sim.wrapper.multistep_wrapper import MultiStepWrapper
 from gr00t.eval.sim.wrapper.video_recording_wrapper import VideoRecorder, VideoRecordingWrapper
 from gr00t.data.embodiment_tags import EmbodimentTag
+import cv2
+
+
+class SelectiveCameraVideoWrapper(VideoRecordingWrapper):
+    """Video wrapper that records only selected camera views for cleaner output."""
+
+    def __init__(self, env, video_recorder, camera_keys=None, **kwargs):
+        """
+        Args:
+            camera_keys: List of camera keys to include (e.g., ['video.side_0.res512']).
+                        If None, uses all video keys (default behavior).
+                        Options typically include:
+                        - 'video.side_0.res256_freq20' - Side view 256px
+                        - 'video.side_0.res512_freq20' - Side view 512px (recommended)
+                        - 'video.side_1.res256_freq20' - Other side view 256px
+                        - 'video.side_1.res512_freq20' - Other side view 512px
+                        - 'video.wrist_0.res256_freq20' - Wrist camera 256px
+                        - 'video.wrist_0.res512_freq20' - Wrist camera 512px
+        """
+        super().__init__(env, video_recorder, **kwargs)
+        self.camera_keys = camera_keys
+
+    def step(self, action):
+        result = super(VideoRecordingWrapper, self).step(action)  # Call grandparent's step
+        self.step_count += 1
+
+        if self.file_path is not None and ((self.step_count % self.steps_per_render) == 0):
+            if not self.video_recorder.is_ready():
+                self.video_recorder.start(self.file_path)
+
+            obs = result[0]
+            video_frames = []
+
+            if self.camera_keys:
+                # Use only selected camera keys
+                for key in self.camera_keys:
+                    if key in obs:
+                        video_frames.append(obs[key])
+                    else:
+                        # Try partial match
+                        for k, v in obs.items():
+                            if key in k and "video" in k:
+                                video_frames.append(v)
+                                break
+            else:
+                # Default: use all video keys
+                for k, v in obs.items():
+                    if "video" in k:
+                        video_frames.append(v)
+
+            if len(video_frames) == 0:
+                # Fallback: use any video key
+                for k, v in obs.items():
+                    if "video" in k:
+                        video_frames.append(v)
+                        break
+
+            assert len(video_frames) > 0, "No video frame found in the observation"
+
+            # Resize frames to common height for horizontal concatenation
+            if len(video_frames) > 1:
+                video_frames = self._resize_frames_to_common_height(video_frames)
+
+            # Concatenate all video frames horizontally
+            if len(video_frames) == 1:
+                frame = video_frames[0]
+            else:
+                frame = np.concatenate(video_frames, axis=1)
+
+            assert frame.dtype == np.uint8
+
+            if self.overlay_text:
+                auto_language_key = [
+                    k for k in result[0].keys()
+                    if k.startswith("annotation.") or k.startswith("language.")
+                ][0]
+                language = result[0][auto_language_key]
+                language = language + " (" + str(int(result[-1]["success"])) + ")"
+
+                # Dynamic font scaling
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_thickness = 2
+                font_color = (255, 255, 255)
+                padding = 5
+                target_width = frame.shape[1] - 2 * padding
+                font_scale = 1.0
+
+                text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[0]
+                if text_size[0] > target_width:
+                    while text_size[0] > target_width and font_scale > 0.1:
+                        font_scale *= 0.9
+                        text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[0]
+                else:
+                    while text_size[0] < target_width and font_scale < 2.0:
+                        font_scale *= 1.1
+                        text_size = cv2.getTextSize(language, font, font_scale, font_thickness)[0]
+                    font_scale *= 0.9
+
+                text_x = padding
+                text_y = frame.shape[0] - 20
+
+                cv2.rectangle(
+                    frame,
+                    (text_x - padding, text_y - text_size[1] - padding),
+                    (text_x + text_size[0] + padding, text_y + padding),
+                    (0, 0, 0), -1,
+                )
+                cv2.putText(
+                    frame, language, (text_x, text_y), font, font_scale, font_color, font_thickness
+                )
+
+            self.video_recorder.write_frame(frame)
+
+        info = result[-1]
+        self.is_success |= info["success"]
+
+        # Update intermediate signals (copied from parent)
+        if "intermediate_signals" in info:
+            for key, value in info["intermediate_signals"].items():
+                if key in ["grasp_obj", "grasp_distractor_obj", "contact_obj", "contact_distractor_obj"]:
+                    initial_value = False
+                elif key in ["gripper_obj_dist", "gripper_distractor_dist"]:
+                    initial_value = 1e9
+                elif key.startswith("_"):
+                    continue
+                else:
+                    continue
+
+                if key not in self.intermediate_signals:
+                    self.intermediate_signals[key] = initial_value
+
+                if key in ["grasp_obj", "grasp_distractor_obj", "contact_obj", "contact_distractor_obj"]:
+                    self.intermediate_signals[key] |= value
+                elif key in ["gripper_obj_dist", "gripper_distractor_dist"]:
+                    self.intermediate_signals[key] = min(self.intermediate_signals[key], value)
+
+        return result
 
 
 class TransparentEvaluator:
@@ -56,6 +200,7 @@ class TransparentEvaluator:
         n_action_steps: int = 8,
         max_episode_steps: int = 504,
         save_video: bool = True,
+        camera_view: str = "side",  # "side", "wrist", "both", or "all"
     ):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -82,9 +227,29 @@ class TransparentEvaluator:
                 input_pix_fmt="rgb24",
                 crf=22,
             )
-            env_to_wrap = VideoRecordingWrapper(
+
+            # Select camera keys based on view preference
+            if camera_view == "side":
+                # Single high-res side view - best for seeing the task
+                camera_keys = ["res512_freq20", "side_0"]
+                print(f"📹 Camera: Side view (512px)")
+            elif camera_view == "wrist":
+                # Wrist camera - good for close-up manipulation
+                camera_keys = ["res512_freq20", "wrist"]
+                print(f"📹 Camera: Wrist view (512px)")
+            elif camera_view == "both":
+                # Side + wrist for comprehensive view
+                camera_keys = ["side_0.res512", "wrist_0.res512"]
+                print(f"📹 Camera: Side + Wrist views (512px)")
+            else:  # "all"
+                # All cameras (original behavior)
+                camera_keys = None
+                print(f"📹 Camera: All views (wide concatenation)")
+
+            env_to_wrap = SelectiveCameraVideoWrapper(
                 self.base_env,
                 video_recorder,
+                camera_keys=camera_keys,
                 video_dir=self.save_dir,
                 steps_per_render=2,
                 max_episode_steps=max_episode_steps,
@@ -401,6 +566,9 @@ def main():
                         help="Number of episodes to run")
     parser.add_argument("--no-video", action="store_true",
                         help="Disable video recording")
+    parser.add_argument("--camera-view", type=str, default="side",
+                        choices=["side", "wrist", "both", "all"],
+                        help="Camera view for video: 'side' (recommended), 'wrist', 'both', or 'all' (default: side)")
 
     args = parser.parse_args()
 
@@ -412,6 +580,7 @@ def main():
         n_action_steps=args.n_action_steps,
         max_episode_steps=args.max_steps,
         save_video=not args.no_video,
+        camera_view=args.camera_view,
     )
 
     try:
