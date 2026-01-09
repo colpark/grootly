@@ -213,7 +213,7 @@ class TransparentEvaluator:
                 "step": step,
                 "reward": float(reward),
                 "total_reward": float(total_reward),
-                "done": done,
+                "done": bool(done),
                 "success": current_success,
             }
             step_logs.append(step_log)
