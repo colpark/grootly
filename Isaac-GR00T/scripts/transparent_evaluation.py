@@ -33,9 +33,12 @@ from typing import Dict, Any, Optional, List
 
 import numpy as np
 
-# Set rendering backend
-os.environ.setdefault("MUJOCO_GL", "egl")
-os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+# Set rendering backend - use osmesa for headless servers
+# Can be overridden by setting MUJOCO_GL before running
+if "MUJOCO_GL" not in os.environ:
+    os.environ["MUJOCO_GL"] = "osmesa"
+if "PYOPENGL_PLATFORM" not in os.environ:
+    os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 
 # Optional visualization
 try:
