@@ -125,6 +125,29 @@ class TransparentEvaluator:
                     else:
                         print(f"   • {key}: {value.tolist()}")
 
+    def _add_batch_dim(self, obs: Dict) -> Dict:
+        """Add batch dimension to observation for policy input."""
+        batched = {}
+        for key, value in obs.items():
+            if isinstance(value, np.ndarray):
+                # Add batch dimension: (T, ...) -> (1, T, ...)
+                batched[key] = value[np.newaxis, ...]
+            else:
+                # For strings (language), wrap in list
+                batched[key] = [value]
+        return batched
+
+    def _remove_batch_dim(self, action: Dict) -> Dict:
+        """Remove batch dimension from action for env input."""
+        unbatched = {}
+        for key, value in action.items():
+            if isinstance(value, np.ndarray) and len(value.shape) > 0:
+                # Remove batch dimension: (1, ...) -> (...)
+                unbatched[key] = value[0]
+            else:
+                unbatched[key] = value
+        return unbatched
+
     def run_episode(self, verbose: bool = True) -> Dict:
         """Run one episode with transparency logging."""
 
@@ -156,8 +179,14 @@ class TransparentEvaluator:
         step_logs = []
 
         while True:
-            # Get action from policy (returns action chunk)
-            action, _ = self.policy.get_action(obs)
+            # Add batch dimension for policy (VectorEnv does this automatically)
+            obs_batched = self._add_batch_dim(obs)
+
+            # Get action from policy (returns action chunk with batch dim)
+            action_batched, _ = self.policy.get_action(obs_batched)
+
+            # Remove batch dimension for env
+            action = self._remove_batch_dim(action_batched)
 
             if verbose and step % 8 == 0:  # Log every policy call
                 print(f"\n{'─'*70}")
