@@ -40,6 +40,7 @@ from gr00t.eval.rollout_policy import (
     MultiStepConfig,
 )
 from gr00t.eval.sim.wrapper.multistep_wrapper import MultiStepWrapper
+from gr00t.eval.sim.wrapper.video_recording_wrapper import VideoRecorder, VideoRecordingWrapper
 from gr00t.data.embodiment_tags import EmbodimentTag
 
 
@@ -54,11 +55,13 @@ class TransparentEvaluator:
         save_dir: str = "./transparent_eval",
         n_action_steps: int = 8,
         max_episode_steps: int = 504,
+        save_video: bool = True,
     ):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.n_action_steps = n_action_steps
         self.max_episode_steps = max_episode_steps
+        self.save_video = save_video
 
         print("\n" + "="*70)
         print("TRANSPARENT ROBOCASA EVALUATION")
@@ -70,9 +73,28 @@ class TransparentEvaluator:
         env_fn = get_robocasa_env_fn(env_name)
         self.base_env = env_fn()
 
+        # Wrap with VideoRecordingWrapper if saving video
+        env_to_wrap = self.base_env
+        if save_video:
+            video_recorder = VideoRecorder.create_h264(
+                fps=20,
+                codec="h264",
+                input_pix_fmt="rgb24",
+                crf=22,
+            )
+            env_to_wrap = VideoRecordingWrapper(
+                self.base_env,
+                video_recorder,
+                video_dir=self.save_dir,
+                steps_per_render=2,
+                max_episode_steps=max_episode_steps,
+                overlay_text=True,
+            )
+            print(f"Video recording enabled: {self.save_dir}")
+
         # Wrap with MultiStepWrapper (same as rollout_policy.py)
         self.env = MultiStepWrapper(
-            self.base_env,
+            env_to_wrap,
             video_delta_indices=np.array([0]),
             state_delta_indices=np.array([0]),
             n_action_steps=n_action_steps,
@@ -377,6 +399,8 @@ def main():
     parser.add_argument("--n-action-steps", type=int, default=8)
     parser.add_argument("--n-episodes", type=int, default=1,
                         help="Number of episodes to run")
+    parser.add_argument("--no-video", action="store_true",
+                        help="Disable video recording")
 
     args = parser.parse_args()
 
@@ -387,6 +411,7 @@ def main():
         save_dir=args.save_dir,
         n_action_steps=args.n_action_steps,
         max_episode_steps=args.max_steps,
+        save_video=not args.no_video,
     )
 
     try:
