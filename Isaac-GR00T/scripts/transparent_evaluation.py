@@ -33,12 +33,9 @@ from typing import Dict, Any, Optional, List
 
 import numpy as np
 
-# Set rendering backend - use osmesa for headless servers
-# Can be overridden by setting MUJOCO_GL before running
-if "MUJOCO_GL" not in os.environ:
-    os.environ["MUJOCO_GL"] = "osmesa"
-if "PYOPENGL_PLATFORM" not in os.environ:
-    os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# Rendering backend: Don't set defaults - let the environment/robocasa handle it
+# The robocasa venv is configured with the correct rendering backend
+# If needed, set MUJOCO_GL=egl or MUJOCO_GL=osmesa before running
 
 # Optional visualization
 try:
