@@ -201,18 +201,23 @@ class TransparentEvaluator:
             step += self.n_action_steps
             total_reward += reward
 
+            # Check success (handle list, array, or bool)
+            success_val = info.get("success", False)
+            if isinstance(success_val, (list, np.ndarray)):
+                current_success = bool(np.any(success_val))
+            else:
+                current_success = bool(success_val)
+
             # Log
             step_log = {
                 "step": step,
                 "reward": float(reward),
                 "total_reward": float(total_reward),
                 "done": done,
-                "success": any(info.get("success", [False])) if isinstance(info.get("success"), list) else info.get("success", False),
+                "success": current_success,
             }
             step_logs.append(step_log)
 
-            # Check success
-            current_success = step_log["success"]
             if current_success:
                 success = True
                 print(f"\n✅ SUCCESS at step {step}!")
