@@ -440,7 +440,23 @@ How it's measured:
                 policy_obs[key] = value
 
         # Get action from policy (returns tuple of (action_dict, info_dict))
-        action, info = self.policy_client.get_action(policy_obs)
+        # Action format: (batch=1, chunk=8, dim) - we need first action from chunk
+        action_chunk, info = self.policy_client.get_action(policy_obs)
+
+        # Extract first action from the chunk, remove batch dimension
+        # Policy returns action chunks with shape (1, 8, dim) for 8 future timesteps
+        action = {}
+        for key, value in action_chunk.items():
+            if isinstance(value, np.ndarray):
+                # Remove batch dim [0] and take first timestep [0]
+                # Shape: (1, 8, dim) -> (dim,)
+                if len(value.shape) >= 2:
+                    action[key] = value[0, 0]  # First batch, first timestep
+                else:
+                    action[key] = value
+            else:
+                action[key] = value
+
         return action, info
 
     def _plot_episode_summary(self, step_logs: List[Dict], success: bool):
