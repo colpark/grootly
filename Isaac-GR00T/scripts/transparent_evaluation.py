@@ -282,7 +282,15 @@ How it's measured:
         # Get first frame for video
         video_key = [k for k in obs.keys() if "res256" in k and "side_0" in k]
         if video_key and save_frames:
-            frames.append(obs[video_key[0]].copy())
+            frame = obs[video_key[0]].copy()
+            frames.append(frame)
+            # Check if frame is actually rendered (not all black)
+            if frame.max() == 0:
+                print("\n⚠️  WARNING: Camera frames are all black!")
+                print("   This may indicate EGL rendering issues.")
+                print("   Try: export MUJOCO_GL=osmesa")
+            else:
+                print(f"\n📷 First frame captured: shape={frame.shape}, range=[{frame.min()}, {frame.max()}]")
 
         done = False
         step = 0
@@ -417,6 +425,12 @@ How it's measured:
                     policy_obs[key] = value[np.newaxis, np.newaxis, ...]
                 elif len(value.shape) == 1:
                     policy_obs[key] = value[np.newaxis, np.newaxis, ...]
+                else:
+                    policy_obs[key] = value
+            elif isinstance(value, str):
+                # Language inputs must be List[List[str]] format
+                if "task_description" in key or "annotation" in key:
+                    policy_obs[key] = [[value]]
                 else:
                     policy_obs[key] = value
             else:
