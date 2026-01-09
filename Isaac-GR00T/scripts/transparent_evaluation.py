@@ -73,7 +73,7 @@ class TransparentEvaluator:
         import robocasa
         import robocasa.utils.gym_utils.gymnasium_groot
 
-        self.env = gym.make(env_name, enable_render=False)
+        self.env = gym.make(env_name, enable_render=True)
         self.env_name = env_name
         self.task_name = env_name.split("/")[1].replace("_PandaOmron_Env", "")
 
