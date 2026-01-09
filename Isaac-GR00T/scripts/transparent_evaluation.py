@@ -428,9 +428,10 @@ How it's measured:
                 else:
                     policy_obs[key] = value
             elif isinstance(value, str):
-                # Language inputs must be List[List[str]] format
+                # Language inputs must be List[str] or Tuple[str] format (batch of strings)
+                # The Gr00tSimPolicyWrapper expects: tuple[str] or list[str] with shape (B,)
                 if "task_description" in key or "annotation" in key:
-                    policy_obs[key] = [[value]]
+                    policy_obs[key] = [value]  # Single batch item
                 else:
                     policy_obs[key] = value
             else:
