@@ -47,19 +47,55 @@ from gr00t.policy.gr00t_policy import Gr00tPolicy
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Action dimension labels for ball2_groot
+# Action dimension labels for ball2_groot (Trossen AI Mobile bimanual robot)
+# Base: velocities, Arms: joint positions in radians
 ACTION_LABELS = [
-    "base_lin_vel", "base_ang_vel",  # base_vel (2)
-    "left_arm_0", "left_arm_1", "left_arm_2", "left_arm_3", "left_arm_4", "left_arm_5", "left_arm_6",  # left_arm (7)
-    "right_arm_0", "right_arm_1", "right_arm_2", "right_arm_3", "right_arm_4", "right_arm_5", "right_arm_6",  # right_arm (7)
+    # Base velocity (2 DOF)
+    "base_linear_vel (m/s)",
+    "base_angular_vel (rad/s)",
+    # Left arm joints (7 DOF) - typical 7-DOF arm configuration
+    "L_waist (rad)",
+    "L_shoulder (rad)",
+    "L_elbow (rad)",
+    "L_forearm_roll (rad)",
+    "L_wrist_pitch (rad)",
+    "L_wrist_roll (rad)",
+    "L_gripper (rad)",
+    # Right arm joints (7 DOF)
+    "R_waist (rad)",
+    "R_shoulder (rad)",
+    "R_elbow (rad)",
+    "R_forearm_roll (rad)",
+    "R_wrist_pitch (rad)",
+    "R_wrist_roll (rad)",
+    "R_gripper (rad)",
 ]
 
 # State dimension labels for ball2_groot
 STATE_LABELS = [
-    "odom_x", "odom_y", "odom_theta",  # base_odom (3)
-    "base_lin_vel", "base_ang_vel",  # base_vel (2)
-    "left_arm_0", "left_arm_1", "left_arm_2", "left_arm_3", "left_arm_4", "left_arm_5", "left_arm_6",  # left_arm (7)
-    "right_arm_0", "right_arm_1", "right_arm_2", "right_arm_3", "right_arm_4", "right_arm_5", "right_arm_6",  # right_arm (7)
+    # Base odometry (3 DOF)
+    "odom_x (m)",
+    "odom_y (m)",
+    "odom_theta (rad)",
+    # Base velocity (2 DOF)
+    "base_linear_vel (m/s)",
+    "base_angular_vel (rad/s)",
+    # Left arm joints (7 DOF)
+    "L_waist (rad)",
+    "L_shoulder (rad)",
+    "L_elbow (rad)",
+    "L_forearm_roll (rad)",
+    "L_wrist_pitch (rad)",
+    "L_wrist_roll (rad)",
+    "L_gripper (rad)",
+    # Right arm joints (7 DOF)
+    "R_waist (rad)",
+    "R_shoulder (rad)",
+    "R_elbow (rad)",
+    "R_forearm_roll (rad)",
+    "R_wrist_pitch (rad)",
+    "R_wrist_roll (rad)",
+    "R_gripper (rad)",
 ]
 
 
