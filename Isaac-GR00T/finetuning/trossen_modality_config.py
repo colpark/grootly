@@ -77,4 +77,7 @@ trossen_mobile_config = {
 # Register config with NEW_EMBODIMENT tag (required for custom robots)
 register_modality_config(trossen_mobile_config, embodiment_tag=EmbodimentTag.NEW_EMBODIMENT)
 
+# Export for evaluation script
+TROSSEN_MOBILE_CONFIG = trossen_mobile_config
+
 print("Registered Trossen AI Mobile modality config for finetuning (as NEW_EMBODIMENT)")
