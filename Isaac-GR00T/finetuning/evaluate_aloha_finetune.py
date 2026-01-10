@@ -253,6 +253,49 @@ def parse_action_gr00t(action: dict) -> dict:
     return {f"action.{key}": action[key][0] for key in action}
 
 
+def compute_success_metrics(
+    gt_actions: np.ndarray,
+    pred_actions: np.ndarray,
+    thresholds: list[float] = [0.05, 0.1, 0.2],
+) -> dict:
+    """
+    Compute proxy success metrics based on action prediction accuracy.
+
+    Returns:
+        dict with:
+        - accuracy_at_threshold: % of predictions within threshold of ground truth
+        - per_dim_accuracy: accuracy broken down by action dimension
+        - temporal_accuracy: accuracy over time (early vs late in trajectory)
+    """
+    errors = np.abs(gt_actions - pred_actions)
+
+    metrics = {}
+
+    # Overall accuracy at different thresholds
+    for thresh in thresholds:
+        within_thresh = (errors < thresh).mean() * 100
+        metrics[f"accuracy_within_{thresh}"] = within_thresh
+
+    # Per-step accuracy (all dims must be within threshold)
+    for thresh in thresholds:
+        step_success = (errors < thresh).all(axis=1).mean() * 100
+        metrics[f"step_success_rate_{thresh}"] = step_success
+
+    # Temporal analysis - first half vs second half
+    mid = len(gt_actions) // 2
+    early_mae = np.abs(gt_actions[:mid] - pred_actions[:mid]).mean()
+    late_mae = np.abs(gt_actions[mid:] - pred_actions[mid:]).mean()
+    metrics["early_mae"] = early_mae
+    metrics["late_mae"] = late_mae
+    metrics["error_drift"] = late_mae - early_mae  # positive = getting worse
+
+    # Per-dimension max error
+    metrics["max_error_per_dim"] = errors.max(axis=0).tolist()
+    metrics["mean_error_per_dim"] = errors.mean(axis=0).tolist()
+
+    return metrics
+
+
 def evaluate_trajectory(
     policy: Gr00tPolicy,
     loader: LeRobotEpisodeLoader,
@@ -260,8 +303,8 @@ def evaluate_trajectory(
     embodiment_tag: EmbodimentTag,
     steps: int = 300,
     action_horizon: int = 16,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
-    """Evaluate model on a single trajectory."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float, dict]:
+    """Evaluate model on a single trajectory. Returns gt_actions, pred_actions, state_joints, mse, mae, success_metrics."""
     traj = loader[traj_id]
     traj_length = len(traj)
     actual_steps = min(steps, traj_length)
@@ -312,7 +355,10 @@ def evaluate_trajectory(
     mse = np.mean((gt_actions - pred_actions) ** 2)
     mae = np.mean(np.abs(gt_actions - pred_actions))
 
-    return gt_actions, pred_actions, state_joints, mse, mae
+    # Compute success metrics
+    success_metrics = compute_success_metrics(gt_actions, pred_actions)
+
+    return gt_actions, pred_actions, state_joints, mse, mae, success_metrics
 
 
 def main():
@@ -385,6 +431,7 @@ def main():
     # Evaluate trajectories
     all_mse = []
     all_mae = []
+    all_success_metrics = []
     action_keys = modality_config["action"].modality_keys
 
     for traj_id in args.traj_ids:
@@ -392,7 +439,7 @@ def main():
             logger.warning(f"Trajectory {traj_id} out of range, skipping")
             continue
 
-        gt_actions, pred_actions, state_joints, mse, mae = evaluate_trajectory(
+        gt_actions, pred_actions, state_joints, mse, mae, success_metrics = evaluate_trajectory(
             policy=policy,
             loader=dataset,
             traj_id=traj_id,
@@ -403,8 +450,11 @@ def main():
 
         all_mse.append(mse)
         all_mae.append(mae)
+        all_success_metrics.append(success_metrics)
 
         logger.info(f"Trajectory {traj_id}: MSE={mse:.6f}, MAE={mae:.6f}")
+        logger.info(f"  Step Success Rate (0.1 thresh): {success_metrics['step_success_rate_0.1']:.1f}%")
+        logger.info(f"  Step Success Rate (0.2 thresh): {success_metrics['step_success_rate_0.2']:.1f}%")
 
         # Generate plot
         plot_path = output_dir / f"trajectory_{traj_id}_comparison.png"
@@ -433,10 +483,30 @@ def main():
     if all_mse:
         avg_mse = np.mean(all_mse)
         avg_mae = np.mean(all_mae)
+
+        # Aggregate success metrics
+        avg_success_005 = np.mean([m['step_success_rate_0.05'] for m in all_success_metrics])
+        avg_success_01 = np.mean([m['step_success_rate_0.1'] for m in all_success_metrics])
+        avg_success_02 = np.mean([m['step_success_rate_0.2'] for m in all_success_metrics])
+        avg_accuracy_01 = np.mean([m['accuracy_within_0.1'] for m in all_success_metrics])
+        avg_accuracy_02 = np.mean([m['accuracy_within_0.2'] for m in all_success_metrics])
+        avg_error_drift = np.mean([m['error_drift'] for m in all_success_metrics])
+
         logger.info("=" * 60)
         logger.info(f"Evaluation Summary ({len(all_mse)} trajectories)")
         logger.info(f"  Average MSE: {avg_mse:.6f}")
         logger.info(f"  Average MAE: {avg_mae:.6f}")
+        logger.info("")
+        logger.info("  Success Rates (all dims within threshold):")
+        logger.info(f"    @ 0.05 threshold: {avg_success_005:.1f}%")
+        logger.info(f"    @ 0.10 threshold: {avg_success_01:.1f}%")
+        logger.info(f"    @ 0.20 threshold: {avg_success_02:.1f}%")
+        logger.info("")
+        logger.info("  Action Accuracy (% of predictions within threshold):")
+        logger.info(f"    @ 0.10 threshold: {avg_accuracy_01:.1f}%")
+        logger.info(f"    @ 0.20 threshold: {avg_accuracy_02:.1f}%")
+        logger.info("")
+        logger.info(f"  Error Drift (late - early MAE): {avg_error_drift:+.6f}")
         logger.info(f"  Results saved to: {output_dir}")
         logger.info("=" * 60)
 
@@ -448,11 +518,25 @@ def main():
             f.write(f"Trajectories evaluated: {args.traj_ids}\n")
             f.write(f"Steps per trajectory: {args.steps}\n")
             f.write(f"Action horizon: {args.action_horizon}\n\n")
-            f.write("Results:\n")
-            for i, (traj_id, mse, mae) in enumerate(zip(args.traj_ids, all_mse, all_mae)):
-                f.write(f"  Trajectory {traj_id}: MSE={mse:.6f}, MAE={mae:.6f}\n")
-            f.write(f"\nAverage MSE: {avg_mse:.6f}\n")
-            f.write(f"Average MAE: {avg_mae:.6f}\n")
+            f.write("Per-Trajectory Results:\n")
+            for i, (traj_id, mse, mae, sm) in enumerate(zip(args.traj_ids, all_mse, all_mae, all_success_metrics)):
+                f.write(f"  Trajectory {traj_id}: MSE={mse:.6f}, MAE={mae:.6f}, "
+                        f"Success@0.1={sm['step_success_rate_0.1']:.1f}%, "
+                        f"Success@0.2={sm['step_success_rate_0.2']:.1f}%\n")
+            f.write(f"\n{'='*50}\n")
+            f.write(f"AGGREGATE METRICS ({len(all_mse)} trajectories)\n")
+            f.write(f"{'='*50}\n")
+            f.write(f"Average MSE: {avg_mse:.6f}\n")
+            f.write(f"Average MAE: {avg_mae:.6f}\n\n")
+            f.write(f"Success Rates (all dims within threshold per step):\n")
+            f.write(f"  @ 0.05 threshold: {avg_success_005:.1f}%\n")
+            f.write(f"  @ 0.10 threshold: {avg_success_01:.1f}%\n")
+            f.write(f"  @ 0.20 threshold: {avg_success_02:.1f}%\n\n")
+            f.write(f"Action Accuracy (% of individual predictions within threshold):\n")
+            f.write(f"  @ 0.10 threshold: {avg_accuracy_01:.1f}%\n")
+            f.write(f"  @ 0.20 threshold: {avg_accuracy_02:.1f}%\n\n")
+            f.write(f"Error Drift (late - early MAE): {avg_error_drift:+.6f}\n")
+            f.write(f"  (positive = errors increase over trajectory)\n")
 
         logger.info(f"Summary saved to {summary_path}")
 
