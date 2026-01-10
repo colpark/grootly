@@ -52,7 +52,7 @@ echo ""
 torchrun --nproc_per_node=${NUM_GPUS} --standalone \
     -m gr00t.experiment.launch_finetune \
     --modality-config-path ./finetuning/trossen_modality_config.py \
-    --embodiment-tag trossen_mobile \
+    --embodiment-tag NEW_EMBODIMENT \
     --dataset-path "${DATASET_PATH}" \
     --base-model-path "${BASE_MODEL}" \
     --output-dir "${OUTPUT_DIR}" \

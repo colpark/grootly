@@ -10,6 +10,7 @@ Robot Configuration:
 - Action: 16 DOF (base_vel[2], left_arm[7], right_arm[7])
 """
 
+from gr00t.configs.data.embodiment_configs import register_modality_config
 from gr00t.data.embodiment_tags import EmbodimentTag
 from gr00t.data.types import (
     ActionConfig,
@@ -18,11 +19,10 @@ from gr00t.data.types import (
     ActionType,
     ModalityConfig,
 )
-from gr00t.configs.data.embodiment_configs import MODALITY_CONFIGS
 
 
 # Trossen AI Mobile modality configuration
-TROSSEN_MOBILE_CONFIG = {
+trossen_mobile_config = {
     "video": ModalityConfig(
         delta_indices=[0],
         modality_keys=[
@@ -74,7 +74,7 @@ TROSSEN_MOBILE_CONFIG = {
     ),
 }
 
-# Register Trossen Mobile config
-MODALITY_CONFIGS["trossen_mobile"] = TROSSEN_MOBILE_CONFIG
+# Register config with NEW_EMBODIMENT tag (required for custom robots)
+register_modality_config(trossen_mobile_config, embodiment_tag=EmbodimentTag.NEW_EMBODIMENT)
 
-print("Registered Trossen AI Mobile modality config for finetuning")
+print("Registered Trossen AI Mobile modality config for finetuning (as NEW_EMBODIMENT)")

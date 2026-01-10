@@ -435,13 +435,8 @@ def main():
     logger.info(f"Loading model from {checkpoint_path}...")
     device = args.device if torch.cuda.is_available() else "cpu"
 
-    # Register trossen_mobile embodiment tag
-    try:
-        embodiment_tag = EmbodimentTag("trossen_mobile")
-    except ValueError:
-        # Fallback to GR1 if trossen_mobile not registered
-        logger.warning("trossen_mobile tag not found, using GR1 as fallback")
-        embodiment_tag = EmbodimentTag.GR1
+    # Use NEW_EMBODIMENT tag for custom robot (Trossen AI Mobile)
+    embodiment_tag = EmbodimentTag.NEW_EMBODIMENT
 
     policy = Gr00tPolicy(
         embodiment_tag=embodiment_tag,
