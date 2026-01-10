@@ -7,7 +7,7 @@ and generates comparison plots showing training progress. It also extracts
 training configuration, hyperparameters, and loss curves from the training output.
 
 Outputs:
-    - training_report.html: Comprehensive HTML report with embedded plots
+    - training_report.html: Comprehensive HTML report with embedded plots and trajectory comparisons
     - training_report.md: Markdown report
     - checkpoint_summary.csv: Raw metrics data
     - training_overview.png: Combined 2x2 metrics overview
@@ -261,6 +261,28 @@ def estimate_model_params(config: dict) -> dict:
     return model_info
 
 
+def find_trajectory_plots(eval_dir: Path, step: int) -> dict[str, list[Path]]:
+    """Find trajectory comparison plots from a specific checkpoint step."""
+    step_dir = eval_dir / f"step_{step}"
+    trajectory_plots = {
+        "comparisons": [],
+        "cameras": [],
+    }
+
+    if not step_dir.exists():
+        return trajectory_plots
+
+    # Find trajectory comparison plots
+    for plot_file in sorted(step_dir.glob("trajectory_*_comparison.png")):
+        trajectory_plots["comparisons"].append(plot_file)
+
+    # Find camera snapshot plots
+    for plot_file in sorted(step_dir.glob("trajectory_*_cameras.png")):
+        trajectory_plots["cameras"].append(plot_file)
+
+    return trajectory_plots
+
+
 def plot_training_loss(loss_steps: list, losses: list, output_dir: Path, dataset_name: str):
     """Plot training loss curve."""
     if not loss_steps or not losses:
@@ -461,6 +483,7 @@ def create_summary_table(
     model_info: dict = None,
     loss_steps: list = None,
     losses: list = None,
+    eval_dir: Path = None,
 ):
     """Create a comprehensive summary CSV and markdown report."""
     steps = sorted(results.keys())
@@ -597,6 +620,7 @@ def create_summary_table(
         f.write("| File | Description |\n")
         f.write("|------|-------------|\n")
         f.write("| `training_report.md` | This comprehensive report |\n")
+        f.write("| `training_report.html` | Comprehensive HTML report with trajectory comparisons |\n")
         f.write("| `checkpoint_summary.csv` | Raw metrics data |\n")
         f.write("| `training_overview.png` | Combined 2x2 metrics overview |\n")
         if loss_steps and losses:
@@ -608,8 +632,19 @@ def create_summary_table(
 
     print(f"  Saved: training_report.md")
 
+    # Find trajectory plots from best checkpoint
+    best_step = int(df.loc[best_mae_idx, 'Step'])
+    trajectory_plots = None
+    search_dir = eval_dir if eval_dir else output_dir
+    if search_dir:
+        trajectory_plots = find_trajectory_plots(search_dir, best_step)
+        n_comparisons = len(trajectory_plots.get("comparisons", []))
+        n_cameras = len(trajectory_plots.get("cameras", []))
+        if n_comparisons or n_cameras:
+            print(f"  Found trajectory plots for best checkpoint (step {best_step}): {n_comparisons} comparisons, {n_cameras} camera views")
+
     # Generate HTML report
-    create_html_report(df, output_dir, dataset_name, hyperparams, model_info, loss_steps, losses)
+    create_html_report(df, output_dir, dataset_name, hyperparams, model_info, loss_steps, losses, trajectory_plots, best_step)
 
     # Print best results
     print(f"\n  Best Results:")
@@ -626,14 +661,16 @@ def create_html_report(
     model_info: dict = None,
     loss_steps: list = None,
     losses: list = None,
+    trajectory_plots: dict = None,
+    best_step: int = None,
 ):
-    """Create a comprehensive HTML report with embedded images."""
+    """Create a comprehensive HTML report with embedded images and trajectory comparisons."""
     import base64
     from datetime import datetime
 
     def encode_image(image_path: Path) -> str:
         """Encode image to base64 for embedding in HTML."""
-        if image_path.exists():
+        if isinstance(image_path, Path) and image_path.exists():
             with open(image_path, "rb") as f:
                 return base64.b64encode(f.read()).decode('utf-8')
         return ""
@@ -839,6 +876,7 @@ def create_html_report(
             <li><a href="#loss">Training Loss</a></li>
             <li><a href="#metrics">Evaluation Metrics</a></li>
             <li><a href="#plots">Visualization Plots</a></li>
+            <li><a href="#trajectories">Best Checkpoint Trajectories</a></li>
         </ul>
     </div>
 """)
@@ -1033,7 +1071,67 @@ def create_html_report(
             </div>
         </div>
     </div>
+""")
 
+        # Trajectory Comparisons Section (Best Checkpoint)
+        if trajectory_plots and (trajectory_plots.get("comparisons") or trajectory_plots.get("cameras")):
+            f.write(f"""
+    <div class="card" id="trajectories">
+        <h2>Best Checkpoint Trajectory Comparisons</h2>
+        <p>Predicted vs Ground Truth action trajectories from the best checkpoint (Step {best_step}).</p>
+""")
+
+            # Add trajectory comparison plots
+            if trajectory_plots.get("comparisons"):
+                f.write("""
+        <h3>Action Trajectory Comparisons</h3>
+        <p>Each plot shows ground truth (blue) vs predicted (red dashed) actions across all dimensions for a test episode.</p>
+""")
+                for i, plot_path in enumerate(trajectory_plots["comparisons"]):
+                    traj_id = plot_path.stem.replace("trajectory_", "").replace("_comparison", "")
+                    plot_b64 = encode_image(plot_path)
+                    if plot_b64:
+                        f.write(f"""
+        <div class="plot-container large" style="margin-bottom: 30px;">
+            <div class="plot-title">Test Episode {traj_id}</div>
+            <img src="data:image/png;base64,{plot_b64}" alt="Trajectory {traj_id} Comparison">
+        </div>
+""")
+
+            # Add camera snapshot plots
+            if trajectory_plots.get("cameras"):
+                f.write("""
+        <h3>Multi-Camera Views</h3>
+        <p>Camera views from the test episodes showing the robot's perspective during evaluation.</p>
+        <div class="grid-2">
+""")
+                for plot_path in trajectory_plots["cameras"]:
+                    traj_id = plot_path.stem.replace("trajectory_", "").replace("_cameras", "")
+                    plot_b64 = encode_image(plot_path)
+                    if plot_b64:
+                        f.write(f"""
+            <div class="plot-container">
+                <div class="plot-title">Episode {traj_id} - Camera Views</div>
+                <img src="data:image/png;base64,{plot_b64}" alt="Episode {traj_id} Cameras">
+            </div>
+""")
+                f.write("""
+        </div>
+""")
+
+            f.write("""
+    </div>
+""")
+        else:
+            # No trajectory plots found
+            f.write(f"""
+    <div class="card" id="trajectories">
+        <h2>Best Checkpoint Trajectory Comparisons</h2>
+        <p><em>No trajectory comparison plots found for step {best_step}. Run evaluation with trajectory visualization enabled to generate these plots.</em></p>
+    </div>
+""")
+
+        f.write("""
     <footer>
         <p>Generated by GR00T Finetuning Pipeline • <a href="training_report.md">View Markdown Report</a> • <a href="checkpoint_summary.csv">Download CSV</a></p>
     </footer>
@@ -1152,7 +1250,7 @@ def main():
     plot_training_curves(results, eval_dir, dataset_name)
 
     # Create summary tables and report
-    create_summary_table(results, eval_dir, dataset_name, hyperparams, model_info, loss_steps, losses)
+    create_summary_table(results, eval_dir, dataset_name, hyperparams, model_info, loss_steps, losses, eval_dir)
 
     print()
     print(f"=" * 60)
