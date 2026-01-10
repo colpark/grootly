@@ -535,6 +535,6 @@ class Gr00tN1d6(PreTrainedModel):
 
 
 # Register the model with HuggingFace
-AutoConfig.register("Gr00tN1d6", Gr00tN1d6Config)
-AutoConfig.register("gr00t_n1", Gr00tN1d6Config)  # HuggingFace checkpoint uses this name
+# model_type must be "gr00t_n1" to match HuggingFace checkpoint
+AutoConfig.register("gr00t_n1", Gr00tN1d6Config)
 AutoModel.register(Gr00tN1d6Config, Gr00tN1d6)
