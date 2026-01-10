@@ -371,8 +371,9 @@ def create_modality_json() -> dict[str, Any]:
             "waist": {"start": 41, "end": 44}
         },
         "video": {
-            "ego_view_bg_crop_pad_res256_freq20": {
-                "original_key": "observation.images.ego_view"
+            "ego_view": {
+                "original_key": "observation.images.ego_view",
+                "video_backend": "decord"
             }
         },
         "annotation": {
@@ -437,9 +438,20 @@ def convert_aloha_to_groot(
         target_image_size: Target image size (default: 256)
     """
     from datasets import load_dataset
+    from huggingface_hub import snapshot_download
 
     print(f"Loading dataset: {input_dataset}")
     ds = load_dataset(input_dataset, split="train")
+
+    # Download videos from HuggingFace
+    print("Downloading videos from HuggingFace...")
+    hf_cache_path = snapshot_download(
+        repo_id=input_dataset,
+        repo_type='dataset',
+        allow_patterns=['videos/**/*']
+    )
+    hf_video_dir = Path(hf_cache_path) / "videos" / "observation.images.top" / "chunk-000"
+    print(f"Videos located at: {hf_video_dir}")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -447,7 +459,7 @@ def convert_aloha_to_groot(
     # Create directory structure
     (output_path / "meta").mkdir(exist_ok=True)
     (output_path / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
-    (output_path / "videos" / "chunk-000" / "ego_view_bg_crop_pad_res256_freq20").mkdir(parents=True, exist_ok=True)
+    (output_path / "videos" / "chunk-000" / "observation.images.ego_view").mkdir(parents=True, exist_ok=True)
 
     # Group by episode
     episodes = {}
@@ -513,8 +525,11 @@ def convert_aloha_to_groot(
             "length": num_frames
         })
 
-        # Note: Video processing would require actual video files
-        # For now, we create a placeholder
+        # Video will be extracted from concatenated file after processing all episodes
+        # Store episode frame range for video extraction
+        ep_data[0]["_video_start_frame"] = sum(len(episodes[i]) for i in range(ep_idx))
+        ep_data[0]["_video_num_frames"] = len(ep_data)
+
         print(f"  Resampled: {len(states)} → {num_frames} frames")
 
     # Save metadata files
@@ -543,6 +558,57 @@ def convert_aloha_to_groot(
     stats = compute_statistics(all_states, all_actions)
     with open(output_path / "meta" / "stats.json", "w") as f:
         json.dump(stats, f, indent=2)
+
+    # Extract videos from concatenated file
+    print("\nExtracting videos from concatenated file...")
+    concat_video_path = hf_video_dir / "file-000.mp4"
+
+    if concat_video_path.exists():
+        cap = cv2.VideoCapture(str(concat_video_path))
+        source_fps = cap.get(cv2.CAP_PROP_FPS)
+
+        frame_idx = 0
+        for ep_idx in sorted(episodes.keys()):
+            ep_data = episodes[ep_idx]
+            ep_num_frames = len(ep_data)  # Original frames at 50Hz
+
+            video_output_path = output_path / "videos" / "chunk-000" / "observation.images.ego_view" / f"episode_{ep_idx:06d}.mp4"
+
+            # Compute which frames to keep for this episode
+            indices = compute_resample_indices(ep_num_frames, ALOHA_FPS, target_fps)
+            indices_set = set(indices)
+
+            # Setup output writer
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+            out = cv2.VideoWriter(
+                str(video_output_path),
+                fourcc,
+                target_fps,
+                (target_image_size, target_image_size)
+            )
+
+            # Process frames for this episode
+            for local_idx in range(ep_num_frames):
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"  Warning: Could not read frame {frame_idx}")
+                    break
+
+                if local_idx in indices_set:
+                    # Transform: crop to square and resize
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_transformed = transform_image(frame_rgb, target_image_size)
+                    frame_bgr = cv2.cvtColor(frame_transformed, cv2.COLOR_RGB2BGR)
+                    out.write(frame_bgr)
+
+                frame_idx += 1
+
+            out.release()
+            print(f"  Episode {ep_idx}: extracted {len(indices)} frames → {video_output_path.name}")
+
+        cap.release()
+    else:
+        print(f"Warning: Concatenated video not found at {concat_video_path}")
 
     print(f"\nConversion complete!")
     print(f"  Output directory: {output_path}")
