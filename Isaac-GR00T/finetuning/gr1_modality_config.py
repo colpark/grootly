@@ -19,7 +19,7 @@ from gr00t.configs.data.embodiment_configs import MODALITY_CONFIGS
 GR1_CONFIG = {
     "video": ModalityConfig(
         delta_indices=[0],
-        modality_keys=["ego_view"],
+        modality_keys=["ego_view_bg_crop_pad_res256_freq20"],
     ),
     "state": ModalityConfig(
         delta_indices=[0],
