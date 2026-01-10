@@ -13,8 +13,8 @@ from . import register_model_config
 class Gr00tN1d6Config(PretrainedConfig):
     """Unified configuration for Gr00tN1d6 model with backbone and action head."""
 
-    # Model identification
-    model_type: str = "gr00t_n1"  # Must match HuggingFace checkpoint model_type
+    # Model identification - "Gr00tN1d6" for N1.6-3B, "gr00t_n1" for N1-2B
+    model_type: str = "Gr00tN1d6"
     model_dtype: str = "bfloat16"  # Use bfloat16 for Flash Attention compatibility
 
     # backbone configuration
