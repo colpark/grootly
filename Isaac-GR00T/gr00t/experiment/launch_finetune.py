@@ -10,6 +10,9 @@ from gr00t.configs.base_config import get_default_config
 from gr00t.configs.finetune_config import FinetuneConfig
 from gr00t.experiment.experiment import run
 
+# Import to register GR00T model with transformers AutoModel
+import gr00t.model.gr00t_n1d6.gr00t_n1d6  # noqa: F401
+
 
 # Make sure the user provided modality config is registered.
 def load_modality_config(modality_config_path: str):
