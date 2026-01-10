@@ -45,6 +45,26 @@ CAMERA_KEYS = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
 STATE_DIM = 19  # odom_x, odom_y, odom_theta, linear_vel, angular_vel, 7 left, 7 right
 ACTION_DIM = 16  # linear_vel, angular_vel, 7 left, 7 right
 
+# Action horizon for relative action computation
+ACTION_HORIZON = 16
+
+# Index mappings for state and action components
+STATE_INDICES = {
+    "base_odom": (0, 3),    # 3 DOF
+    "base_vel": (3, 5),     # 2 DOF
+    "left_arm": (5, 12),    # 7 DOF
+    "right_arm": (12, 19),  # 7 DOF
+}
+
+ACTION_INDICES = {
+    "base_vel": (0, 2),     # 2 DOF - ABSOLUTE
+    "left_arm": (2, 9),     # 7 DOF - RELATIVE
+    "right_arm": (9, 16),   # 7 DOF - RELATIVE
+}
+
+# Components that use relative action representation
+RELATIVE_ACTION_KEYS = ["left_arm", "right_arm"]
+
 
 def compute_resample_indices(num_frames: int, source_fps: int, target_fps: int) -> list[int]:
     """Compute frame indices for temporal resampling."""
@@ -223,11 +243,82 @@ def compute_statistics(all_states: list[np.ndarray], all_actions: list[np.ndarra
     return stats
 
 
+def compute_relative_action_statistics(
+    all_states: list[np.ndarray],
+    all_actions: list[np.ndarray],
+    action_horizon: int = ACTION_HORIZON,
+) -> dict:
+    """
+    Compute relative action statistics for components using RELATIVE representation.
+
+    Relative action = action[t+i] - state[t] for i in range(action_horizon)
+
+    This is required for GR00T finetuning when using ActionRepresentation.RELATIVE.
+
+    Args:
+        all_states: List of state arrays, each shape (T, STATE_DIM)
+        all_actions: List of action arrays, each shape (T, ACTION_DIM)
+        action_horizon: Number of action steps to predict (default: 16)
+
+    Returns:
+        dict mapping component name to statistics with shape (action_horizon, component_dim)
+    """
+    relative_stats = {}
+
+    for key in RELATIVE_ACTION_KEYS:
+        state_start, state_end = STATE_INDICES[key]
+        action_start, action_end = ACTION_INDICES[key]
+        component_dim = state_end - state_start
+
+        # Collect all relative action chunks
+        all_relative_chunks = []
+
+        for states, actions in zip(all_states, all_actions):
+            episode_length = len(states)
+            # We can only compute relative actions for timesteps where we have
+            # enough future actions to fill the action horizon
+            usable_length = episode_length - action_horizon
+
+            for t in range(usable_length):
+                # Current state for this component
+                current_state = states[t, state_start:state_end]  # Shape: (component_dim,)
+
+                # Future actions for this component over the action horizon
+                future_actions = actions[t:t + action_horizon, action_start:action_end]  # Shape: (horizon, component_dim)
+
+                # Compute relative action: action - current_state
+                relative_chunk = future_actions - current_state  # Broadcasting: (horizon, dim) - (dim,) = (horizon, dim)
+                all_relative_chunks.append(relative_chunk)
+
+        if not all_relative_chunks:
+            print(f"  Warning: No relative chunks computed for {key}")
+            continue
+
+        # Stack all chunks: shape (num_chunks, action_horizon, component_dim)
+        all_chunks = np.stack(all_relative_chunks, axis=0)
+
+        # Compute statistics across all chunks (axis=0)
+        # Result shape: (action_horizon, component_dim)
+        relative_stats[key] = {
+            "mean": np.mean(all_chunks, axis=0).tolist(),
+            "std": np.std(all_chunks, axis=0).tolist(),
+            "min": np.min(all_chunks, axis=0).tolist(),
+            "max": np.max(all_chunks, axis=0).tolist(),
+            "q01": np.percentile(all_chunks, 1, axis=0).tolist(),
+            "q99": np.percentile(all_chunks, 99, axis=0).tolist(),
+        }
+
+        print(f"  Computed relative stats for {key}: {len(all_chunks)} chunks, shape ({action_horizon}, {component_dim})")
+
+    return relative_stats
+
+
 def create_metadata(
     output_path: Path,
     episode_infos: list[dict],
     task_description: str,
     stats: dict,
+    relative_stats: dict,
     split_name: str,
 ):
     """Create metadata files for the dataset."""
@@ -291,6 +382,12 @@ def create_metadata(
     # stats.json
     with open(meta_dir / "stats.json", "w") as f:
         json.dump(stats, f, indent=2)
+
+    # relative_stats.json - Required for RELATIVE action representation
+    if relative_stats:
+        with open(meta_dir / "relative_stats.json", "w") as f:
+            json.dump(relative_stats, f, indent=2)
+        print(f"  Created relative_stats.json with keys: {list(relative_stats.keys())}")
 
     # modality.json - Required by GR00T for dimension mapping
     # Maps component names to ranges within concatenated state/action vectors
@@ -442,9 +539,12 @@ def main():
 
     if train_states and train_actions:
         train_stats = compute_statistics(train_states, train_actions)
+        print("\nComputing relative action statistics for training set...")
+        train_relative_stats = compute_relative_action_statistics(train_states, train_actions)
     else:
         train_stats = {}
-    create_metadata(train_output, train_infos, task_description, train_stats, "train")
+        train_relative_stats = {}
+    create_metadata(train_output, train_infos, task_description, train_stats, train_relative_stats, "train")
 
     # Convert test set
     print("\n" + "=" * 60)
@@ -470,9 +570,12 @@ def main():
 
     if test_states and test_actions:
         test_stats = compute_statistics(test_states, test_actions)
+        print("\nComputing relative action statistics for test set...")
+        test_relative_stats = compute_relative_action_statistics(test_states, test_actions)
     else:
         test_stats = {}
-    create_metadata(test_output, test_infos, task_description, test_stats, "test")
+        test_relative_stats = {}
+    create_metadata(test_output, test_infos, task_description, test_stats, test_relative_stats, "test")
 
     print("\n" + "=" * 60)
     print("CONVERSION COMPLETE")
