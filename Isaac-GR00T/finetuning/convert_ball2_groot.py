@@ -153,7 +153,10 @@ def convert_episode(
     state_data = None
     action_data = None
 
-    if "observation" in resampled_df.columns:
+    # Source uses "observation.state" column name
+    if "observation.state" in resampled_df.columns:
+        state_data = np.vstack(resampled_df["observation.state"].values)  # Shape: (T, 19)
+    elif "observation" in resampled_df.columns:
         state_data = np.vstack(resampled_df["observation"].values)  # Shape: (T, 19)
 
     if "action" in resampled_df.columns:
