@@ -559,13 +559,16 @@ def convert_aloha_to_groot(
     with open(output_path / "meta" / "stats.json", "w") as f:
         json.dump(stats, f, indent=2)
 
-    # Extract videos from concatenated file
+    # Extract videos from concatenated file using imageio (for AV1 decoding)
     print("\nExtracting videos from concatenated file...")
     concat_video_path = hf_video_dir / "file-000.mp4"
 
     if concat_video_path.exists():
-        cap = cv2.VideoCapture(str(concat_video_path))
-        source_fps = cap.get(cv2.CAP_PROP_FPS)
+        import imageio.v3 as iio
+
+        print("  Loading video with imageio (this may take a moment)...")
+        all_frames = iio.imread(str(concat_video_path))
+        print(f"  Loaded {len(all_frames)} frames, shape: {all_frames.shape}")
 
         frame_idx = 0
         for ep_idx in sorted(episodes.keys()):
@@ -576,10 +579,9 @@ def convert_aloha_to_groot(
 
             # Compute which frames to keep for this episode
             indices = compute_resample_indices(ep_num_frames, ALOHA_FPS, target_fps)
-            indices_set = set(indices)
 
-            # Setup output writer
-            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+            # Setup output writer with mp4v codec (H.264 not available on all systems)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(
                 str(video_output_path),
                 fourcc,
@@ -588,25 +590,22 @@ def convert_aloha_to_groot(
             )
 
             # Process frames for this episode
-            for local_idx in range(ep_num_frames):
-                ret, frame = cap.read()
-                if not ret:
-                    print(f"  Warning: Could not read frame {frame_idx}")
+            for local_idx in indices:
+                global_idx = frame_idx + local_idx
+                if global_idx >= len(all_frames):
+                    print(f"  Warning: Frame index {global_idx} out of bounds")
                     break
 
-                if local_idx in indices_set:
-                    # Transform: crop to square and resize
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frame_transformed = transform_image(frame_rgb, target_image_size)
-                    frame_bgr = cv2.cvtColor(frame_transformed, cv2.COLOR_RGB2BGR)
-                    out.write(frame_bgr)
-
-                frame_idx += 1
+                frame_rgb = all_frames[global_idx]
+                frame_transformed = transform_image(frame_rgb, target_image_size)
+                frame_bgr = cv2.cvtColor(frame_transformed, cv2.COLOR_RGB2BGR)
+                out.write(frame_bgr)
 
             out.release()
+            frame_idx += ep_num_frames
             print(f"  Episode {ep_idx}: extracted {len(indices)} frames → {video_output_path.name}")
 
-        cap.release()
+        del all_frames  # Free memory
     else:
         print(f"Warning: Concatenated video not found at {concat_video_path}")
 
