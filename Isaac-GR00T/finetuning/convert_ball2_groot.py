@@ -117,13 +117,13 @@ def convert_episode(
     episode_idx: int,
     new_episode_idx: int,
     task_description: str,
-) -> dict | None:
-    """Convert a single episode to GR00T format."""
+) -> tuple[dict | None, np.ndarray | None, np.ndarray | None]:
+    """Convert a single episode to GR00T format. Returns episode_info, states, actions."""
     # Read parquet data
     parquet_path = input_path / "data" / "chunk-000" / f"episode_{episode_idx:06d}.parquet"
     if not parquet_path.exists():
         print(f"  Parquet not found: {parquet_path}")
-        return None
+        return None, None, None
 
     df = pd.read_parquet(parquet_path)
     num_frames = len(df)
@@ -149,31 +149,32 @@ def convert_episode(
     # Process state and action data
     resampled_df = df.iloc[resample_indices].copy()
 
-    # Build new dataframe
+    # Extract state (19 DOF) and action (16 DOF) as concatenated arrays
+    state_data = None
+    action_data = None
+
+    if "observation" in resampled_df.columns:
+        state_data = np.vstack(resampled_df["observation"].values)  # Shape: (T, 19)
+
+    if "action" in resampled_df.columns:
+        action_data = np.vstack(resampled_df["action"].values)  # Shape: (T, 16)
+
+    # Build new dataframe with GR00T expected format
     new_data = {
         "frame_index": list(range(resampled_frames)),
         "episode_index": [new_episode_idx] * resampled_frames,
-        "index": list(range(resampled_frames)),  # Will be updated later for global index
+        "index": list(range(resampled_frames)),
         "timestamp": [i / TARGET_FPS for i in range(resampled_frames)],
         "task_index": [0] * resampled_frames,
         "task": [task_description] * resampled_frames,
     }
 
-    # State observation (19 DOF)
-    if "observation" in resampled_df.columns:
-        state_data = np.vstack(resampled_df["observation"].values)
-        # Split into components for GR00T format
-        new_data["state.base_odom"] = [state_data[i, :3].tolist() for i in range(resampled_frames)]  # odom_x, odom_y, odom_theta
-        new_data["state.base_vel"] = [state_data[i, 3:5].tolist() for i in range(resampled_frames)]  # linear_vel, angular_vel
-        new_data["state.left_arm"] = [state_data[i, 5:12].tolist() for i in range(resampled_frames)]  # 7 left joints
-        new_data["state.right_arm"] = [state_data[i, 12:19].tolist() for i in range(resampled_frames)]  # 7 right joints
+    # Store concatenated state and action (what GR00T loader expects)
+    if state_data is not None:
+        new_data["observation.state"] = [state_data[i].tolist() for i in range(resampled_frames)]
 
-    # Action (16 DOF)
-    if "action" in resampled_df.columns:
-        action_data = np.vstack(resampled_df["action"].values)
-        new_data["action.base_vel"] = [action_data[i, :2].tolist() for i in range(resampled_frames)]  # linear_vel, angular_vel
-        new_data["action.left_arm"] = [action_data[i, 2:9].tolist() for i in range(resampled_frames)]  # 7 left joints
-        new_data["action.right_arm"] = [action_data[i, 9:16].tolist() for i in range(resampled_frames)]  # 7 right joints
+    if action_data is not None:
+        new_data["action"] = [action_data[i].tolist() for i in range(resampled_frames)]
 
     # Save parquet
     out_parquet = output_path / "data" / "chunk-000" / f"episode_{new_episode_idx:06d}.parquet"
@@ -182,44 +183,39 @@ def convert_episode(
     new_df = pd.DataFrame(new_data)
     new_df.to_parquet(out_parquet)
 
-    return {
+    episode_info = {
         "episode_index": new_episode_idx,
         "num_frames": resampled_frames,
         "original_episode": episode_idx,
     }
 
+    return episode_info, state_data, action_data
 
-def compute_statistics(output_path: Path) -> dict:
+
+def compute_statistics(all_states: list[np.ndarray], all_actions: list[np.ndarray]) -> dict:
     """Compute dataset statistics for normalization."""
-    all_data = {
-        "state.base_odom": [],
-        "state.base_vel": [],
-        "state.left_arm": [],
-        "state.right_arm": [],
-        "action.base_vel": [],
-        "action.left_arm": [],
-        "action.right_arm": [],
+    # Concatenate all episodes
+    states_concat = np.concatenate(all_states, axis=0)  # Shape: (total_frames, 19)
+    actions_concat = np.concatenate(all_actions, axis=0)  # Shape: (total_frames, 16)
+
+    stats = {
+        "observation.state": {
+            "mean": states_concat.mean(axis=0).tolist(),
+            "std": states_concat.std(axis=0).tolist(),
+            "min": states_concat.min(axis=0).tolist(),
+            "max": states_concat.max(axis=0).tolist(),
+            "q01": np.percentile(states_concat, 1, axis=0).tolist(),
+            "q99": np.percentile(states_concat, 99, axis=0).tolist(),
+        },
+        "action": {
+            "mean": actions_concat.mean(axis=0).tolist(),
+            "std": actions_concat.std(axis=0).tolist(),
+            "min": actions_concat.min(axis=0).tolist(),
+            "max": actions_concat.max(axis=0).tolist(),
+            "q01": np.percentile(actions_concat, 1, axis=0).tolist(),
+            "q99": np.percentile(actions_concat, 99, axis=0).tolist(),
+        }
     }
-
-    parquet_dir = output_path / "data" / "chunk-000"
-    for parquet_file in sorted(parquet_dir.glob("episode_*.parquet")):
-        df = pd.read_parquet(parquet_file)
-        for key in all_data.keys():
-            if key in df.columns:
-                all_data[key].extend(df[key].tolist())
-
-    stats = {}
-    for key, values in all_data.items():
-        if values:
-            arr = np.array(values)
-            stats[key] = {
-                "mean": arr.mean(axis=0).tolist(),
-                "std": arr.std(axis=0).tolist(),
-                "min": arr.min(axis=0).tolist(),
-                "max": arr.max(axis=0).tolist(),
-                "q01": np.percentile(arr, 1, axis=0).tolist(),
-                "q99": np.percentile(arr, 99, axis=0).tolist(),
-            }
 
     return stats
 
@@ -255,13 +251,8 @@ def create_metadata(
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
         "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
         "features": {
-            "state.base_odom": {"dtype": "float32", "shape": [3]},
-            "state.base_vel": {"dtype": "float32", "shape": [2]},
-            "state.left_arm": {"dtype": "float32", "shape": [7]},
-            "state.right_arm": {"dtype": "float32", "shape": [7]},
-            "action.base_vel": {"dtype": "float32", "shape": [2]},
-            "action.left_arm": {"dtype": "float32", "shape": [7]},
-            "action.right_arm": {"dtype": "float32", "shape": [7]},
+            "observation.state": {"dtype": "float32", "shape": [STATE_DIM]},
+            "action": {"dtype": "float32", "shape": [ACTION_DIM]},
             **{f"observation.images.{cam}": {
                 "dtype": "video",
                 "shape": [TARGET_IMAGE_SIZE, TARGET_IMAGE_SIZE, 3],
@@ -299,14 +290,17 @@ def create_metadata(
         json.dump(stats, f, indent=2)
 
     # modality.json - Required by GR00T for dimension mapping
+    # Maps component names to ranges within concatenated state/action vectors
     modality = {
         "state": {
+            # State: 19 DOF total
             "base_odom": {"start": 0, "end": 3},   # 3 DOF: odom_x, odom_y, odom_theta
             "base_vel": {"start": 3, "end": 5},    # 2 DOF: linear_vel, angular_vel
             "left_arm": {"start": 5, "end": 12},   # 7 DOF: joint positions
             "right_arm": {"start": 12, "end": 19}, # 7 DOF: joint positions
         },
         "action": {
+            # Action: 16 DOF total
             "base_vel": {"start": 0, "end": 2},    # 2 DOF: linear_vel, angular_vel
             "left_arm": {"start": 2, "end": 9},    # 7 DOF: joint commands
             "right_arm": {"start": 9, "end": 16},  # 7 DOF: joint commands
@@ -362,10 +356,40 @@ def main():
         default=5,
         help="Number of test episodes (default: 5)",
     )
+    parser.add_argument(
+        "--log_file",
+        type=str,
+        default="./conversion_log.txt",
+        help="Path to log file for debugging",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input_path)
     output_base = Path(args.output_base)
+
+    # Setup logging
+    import sys
+    log_file = open(args.log_file, "w")
+    class TeeOutput:
+        def __init__(self, *files):
+            self.files = files
+        def write(self, text):
+            for f in self.files:
+                f.write(text)
+                f.flush()
+        def flush(self):
+            for f in self.files:
+                f.flush()
+    sys.stdout = TeeOutput(sys.stdout, log_file)
+    sys.stderr = TeeOutput(sys.stderr, log_file)
+
+    print(f"Ball2 GR00T Conversion Log")
+    print(f"=" * 60)
+    print(f"Input: {input_path}")
+    print(f"Output: {output_base}")
+    print(f"Train episodes: {args.train_episodes}")
+    print(f"Test episodes: {args.test_episodes}")
+    print(f"=" * 60)
 
     # Read task description
     tasks_file = input_path / "meta" / "tasks.jsonl"
@@ -401,12 +425,22 @@ def main():
         shutil.rmtree(train_output)
 
     train_infos = []
+    train_states = []
+    train_actions = []
+
     for new_idx, orig_idx in enumerate(train_eps):
-        ep_info = convert_episode(input_path, train_output, orig_idx, new_idx, task_description)
+        ep_info, states, actions = convert_episode(input_path, train_output, orig_idx, new_idx, task_description)
         if ep_info:
             train_infos.append(ep_info)
+            if states is not None:
+                train_states.append(states)
+            if actions is not None:
+                train_actions.append(actions)
 
-    train_stats = compute_statistics(train_output)
+    if train_states and train_actions:
+        train_stats = compute_statistics(train_states, train_actions)
+    else:
+        train_stats = {}
     create_metadata(train_output, train_infos, task_description, train_stats, "train")
 
     # Convert test set
@@ -419,12 +453,22 @@ def main():
         shutil.rmtree(test_output)
 
     test_infos = []
+    test_states = []
+    test_actions = []
+
     for new_idx, orig_idx in enumerate(test_eps):
-        ep_info = convert_episode(input_path, test_output, orig_idx, new_idx, task_description)
+        ep_info, states, actions = convert_episode(input_path, test_output, orig_idx, new_idx, task_description)
         if ep_info:
             test_infos.append(ep_info)
+            if states is not None:
+                test_states.append(states)
+            if actions is not None:
+                test_actions.append(actions)
 
-    test_stats = compute_statistics(test_output)
+    if test_states and test_actions:
+        test_stats = compute_statistics(test_states, test_actions)
+    else:
+        test_stats = {}
     create_metadata(test_output, test_infos, task_description, test_stats, "test")
 
     print("\n" + "=" * 60)
@@ -436,6 +480,9 @@ def main():
     print(f"Test data: {test_output}")
     print(f"  Episodes: {len(test_infos)}")
     print(f"  Total frames: {sum(ep['num_frames'] for ep in test_infos)}")
+    print(f"\nLog saved to: {args.log_file}")
+
+    log_file.close()
 
 
 if __name__ == "__main__":
