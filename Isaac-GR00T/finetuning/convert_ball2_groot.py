@@ -298,6 +298,41 @@ def create_metadata(
     with open(meta_dir / "stats.json", "w") as f:
         json.dump(stats, f, indent=2)
 
+    # modality.json - Required by GR00T for dimension mapping
+    modality = {
+        "state": {
+            "base_odom": {"start": 0, "end": 3},   # 3 DOF: odom_x, odom_y, odom_theta
+            "base_vel": {"start": 3, "end": 5},    # 2 DOF: linear_vel, angular_vel
+            "left_arm": {"start": 5, "end": 12},   # 7 DOF: joint positions
+            "right_arm": {"start": 12, "end": 19}, # 7 DOF: joint positions
+        },
+        "action": {
+            "base_vel": {"start": 0, "end": 2},    # 2 DOF: linear_vel, angular_vel
+            "left_arm": {"start": 2, "end": 9},    # 7 DOF: joint commands
+            "right_arm": {"start": 9, "end": 16},  # 7 DOF: joint commands
+        },
+        "video": {
+            "cam_high": {
+                "original_key": "observation.images.cam_high",
+                "video_backend": "decord"
+            },
+            "cam_left_wrist": {
+                "original_key": "observation.images.cam_left_wrist",
+                "video_backend": "decord"
+            },
+            "cam_right_wrist": {
+                "original_key": "observation.images.cam_right_wrist",
+                "video_backend": "decord"
+            },
+        },
+        "annotation": {
+            "human.action.task_description": {},
+            "human.validity": {},
+        }
+    }
+    with open(meta_dir / "modality.json", "w") as f:
+        json.dump(modality, f, indent=2)
+
     print(f"  Created metadata: {num_episodes} episodes, {total_frames} frames")
 
 
