@@ -160,10 +160,21 @@ def create_video_visualization(
         logger.warning("imageio or cv2 not available, skipping video generation")
         return
 
-    # Load video frames
-    video_path = Path(dataset_path) / "videos" / f"ego_view_episode_{traj_id:06d}.mp4"
-    if not video_path.exists():
-        logger.warning(f"Video not found: {video_path}")
+    # Load video frames - try multiple path patterns
+    video_paths = [
+        Path(dataset_path) / "videos" / "chunk-000" / "observation.images.ego_view" / f"episode_{traj_id:06d}.mp4",
+        Path(dataset_path) / "videos" / f"ego_view_episode_{traj_id:06d}.mp4",
+        Path(dataset_path) / "videos" / f"episode_{traj_id:06d}.mp4",
+    ]
+
+    video_path = None
+    for vp in video_paths:
+        if vp.exists():
+            video_path = vp
+            break
+
+    if video_path is None:
+        logger.warning(f"Video not found. Tried: {video_paths[0]}")
         return
 
     try:
