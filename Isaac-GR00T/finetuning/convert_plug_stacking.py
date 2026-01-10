@@ -161,7 +161,7 @@ def convert_episode(
 
     # Process videos for all cameras
     for cam_key in CAMERA_KEYS:
-        video_in = source_path / "videos" / "chunk-000" / cam_key / f"episode_{source_episode_idx:06d}.mp4"
+        video_in = source_path / "videos" / "chunk-000" / f"observation.images.{cam_key}" / f"episode_{source_episode_idx:06d}.mp4"
         video_out = output_path / "videos" / "chunk-000" / f"observation.images.{cam_key}" / f"episode_{new_episode_idx:06d}.mp4"
 
         if video_in.exists():
