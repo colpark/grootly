@@ -6,6 +6,17 @@ This script reads evaluation results from multiple checkpoint evaluations
 and generates comparison plots showing training progress. It also extracts
 training configuration, hyperparameters, and loss curves from the training output.
 
+Outputs:
+    - training_report.html: Comprehensive HTML report with embedded plots
+    - training_report.md: Markdown report
+    - checkpoint_summary.csv: Raw metrics data
+    - training_overview.png: Combined 2x2 metrics overview
+    - training_loss.png: Training loss curve (if available)
+    - eval_loss_curves.png: MSE and MAE over checkpoints
+    - success_rates.png: Success rates at thresholds
+    - accuracy_rates.png: Accuracy rates at thresholds
+    - component_mae.png: Per-component MAE breakdown
+
 Usage:
     python finetuning/plot_checkpoint_results.py --eval_dir ./eval_results/ball2_groot
     python finetuning/plot_checkpoint_results.py --eval_dir ./eval_results/ball2_groot --checkpoint_dir ./outputs/ball2_groot
@@ -597,11 +608,441 @@ def create_summary_table(
 
     print(f"  Saved: training_report.md")
 
+    # Generate HTML report
+    create_html_report(df, output_dir, dataset_name, hyperparams, model_info, loss_steps, losses)
+
     # Print best results
     print(f"\n  Best Results:")
     print(f"    Lowest MSE: Step {int(df.loc[best_mse_idx, 'Step'])} ({df.loc[best_mse_idx, 'MSE']:.6f})")
     print(f"    Lowest MAE: Step {int(df.loc[best_mae_idx, 'Step'])} ({df.loc[best_mae_idx, 'MAE']:.6f})")
     print(f"    Best Success@0.10: Step {int(df.loc[best_success_idx, 'Step'])} ({df.loc[best_success_idx, 'Success@0.10']:.1f}%)")
+
+
+def create_html_report(
+    df: pd.DataFrame,
+    output_dir: Path,
+    dataset_name: str,
+    hyperparams: dict = None,
+    model_info: dict = None,
+    loss_steps: list = None,
+    losses: list = None,
+):
+    """Create a comprehensive HTML report with embedded images."""
+    import base64
+    from datetime import datetime
+
+    def encode_image(image_path: Path) -> str:
+        """Encode image to base64 for embedding in HTML."""
+        if image_path.exists():
+            with open(image_path, "rb") as f:
+                return base64.b64encode(f.read()).decode('utf-8')
+        return ""
+
+    # Find best checkpoints
+    best_mse_idx = df['MSE'].idxmin()
+    best_mae_idx = df['MAE'].idxmin()
+    best_success_idx = df['Success@0.10'].idxmax()
+
+    html_path = output_dir / 'training_report.html'
+
+    # CSS styles
+    css = """
+    <style>
+        :root {
+            --primary-color: #2E86AB;
+            --secondary-color: #A23B72;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+            --bg-color: #f8f9fa;
+            --card-bg: #ffffff;
+            --text-color: #333333;
+            --border-color: #dee2e6;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        header {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        header .subtitle { opacity: 0.9; font-size: 1.1em; }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            border: 1px solid var(--border-color);
+        }
+
+        .card h2 {
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .card h3 {
+            color: var(--secondary-color);
+            margin: 20px 0 15px 0;
+            font-size: 1.2em;
+        }
+
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+
+        @media (max-width: 768px) {
+            .grid-2 { grid-template-columns: 1fr; }
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 0.95em;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+
+        tr:nth-child(even) { background-color: #f8f9fa; }
+        tr:hover { background-color: #e9ecef; }
+
+        .highlight-row { background-color: #d4edda !important; font-weight: 600; }
+
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .metric-card.success { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+        .metric-card.warning { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .metric-card.info { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+
+        .metric-value { font-size: 2.5em; font-weight: bold; margin: 10px 0; }
+        .metric-label { font-size: 0.9em; opacity: 0.9; }
+
+        .plot-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .plot-container img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .plot-container.large img { max-width: 100%; }
+        .plot-container.medium img { max-width: 80%; }
+
+        .plot-title {
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .badge-primary { background-color: var(--primary-color); color: white; }
+        .badge-success { background-color: var(--success-color); color: white; }
+
+        .info-list { list-style: none; }
+        .info-list li { padding: 8px 0; border-bottom: 1px solid #eee; }
+        .info-list li:last-child { border-bottom: none; }
+        .info-list strong { color: var(--primary-color); }
+
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 30px;
+        }
+
+        .toc {
+            background: #f1f3f4;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .toc h3 { margin-bottom: 15px; }
+        .toc ul { list-style: none; }
+        .toc li { padding: 5px 0; }
+        .toc a { color: var(--primary-color); text-decoration: none; }
+        .toc a:hover { text-decoration: underline; }
+    </style>
+    """
+
+    with open(html_path, 'w') as f:
+        f.write(f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{dataset_name} - Training Report</title>
+    {css}
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>{dataset_name}</h1>
+        <div class="subtitle">Training Report • Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+    </header>
+
+    <div class="toc">
+        <h3>Contents</h3>
+        <ul>
+            <li><a href="#summary">Executive Summary</a></li>
+            <li><a href="#config">Training Configuration</a></li>
+            <li><a href="#loss">Training Loss</a></li>
+            <li><a href="#metrics">Evaluation Metrics</a></li>
+            <li><a href="#plots">Visualization Plots</a></li>
+        </ul>
+    </div>
+""")
+
+        # Executive Summary
+        f.write("""
+    <div class="card" id="summary">
+        <h2>Executive Summary</h2>
+        <div class="grid">
+""")
+        f.write(f"""
+            <div class="metric-card success">
+                <div class="metric-label">Best Checkpoint (MAE)</div>
+                <div class="metric-value">Step {int(df.loc[best_mae_idx, 'Step'])}</div>
+                <div class="metric-label">MAE: {df.loc[best_mae_idx, 'MAE']:.4f}</div>
+            </div>
+            <div class="metric-card info">
+                <div class="metric-label">Best Success@0.10</div>
+                <div class="metric-value">{df.loc[best_success_idx, 'Success@0.10']:.1f}%</div>
+                <div class="metric-label">Step {int(df.loc[best_success_idx, 'Step'])}</div>
+            </div>
+            <div class="metric-card warning">
+                <div class="metric-label">Checkpoints Evaluated</div>
+                <div class="metric-value">{len(df)}</div>
+                <div class="metric-label">Steps: {int(df['Step'].min())} - {int(df['Step'].max())}</div>
+            </div>
+""")
+
+        if losses:
+            f.write(f"""
+            <div class="metric-card">
+                <div class="metric-label">Training Loss</div>
+                <div class="metric-value">{losses[-1]:.4f}</div>
+                <div class="metric-label">Min: {min(losses):.4f}</div>
+            </div>
+""")
+
+        f.write("""
+        </div>
+    </div>
+""")
+
+        # Training Configuration
+        if hyperparams or model_info:
+            f.write("""
+    <div class="card" id="config">
+        <h2>Training Configuration</h2>
+        <div class="grid-2">
+""")
+            if model_info:
+                f.write("""
+            <div>
+                <h3>Model</h3>
+                <table>
+                    <tr><th>Parameter</th><th>Value</th></tr>
+""")
+                for k, v in model_info.items():
+                    if isinstance(v, list):
+                        v = ", ".join(v)
+                    f.write(f"                    <tr><td>{k.replace('_', ' ').title()}</td><td>{v}</td></tr>\n")
+                f.write("""
+                </table>
+            </div>
+""")
+
+            if hyperparams:
+                f.write("""
+            <div>
+                <h3>Hyperparameters</h3>
+                <table>
+                    <tr><th>Parameter</th><th>Value</th></tr>
+""")
+                for k, v in hyperparams.items():
+                    f.write(f"                    <tr><td>{k.replace('_', ' ').title()}</td><td>{v}</td></tr>\n")
+                f.write("""
+                </table>
+            </div>
+""")
+            f.write("""
+        </div>
+    </div>
+""")
+
+        # Training Loss
+        if loss_steps and losses:
+            training_loss_b64 = encode_image(output_dir / 'training_loss.png')
+            f.write(f"""
+    <div class="card" id="loss">
+        <h2>Training Loss</h2>
+        <ul class="info-list">
+            <li><strong>Initial Loss:</strong> {losses[0]:.4f}</li>
+            <li><strong>Final Loss:</strong> {losses[-1]:.4f}</li>
+            <li><strong>Minimum Loss:</strong> {min(losses):.4f} (step {loss_steps[losses.index(min(losses))]})</li>
+            <li><strong>Total Steps Logged:</strong> {len(losses)}</li>
+        </ul>
+        <div class="plot-container large">
+            <img src="data:image/png;base64,{training_loss_b64}" alt="Training Loss">
+        </div>
+    </div>
+""")
+
+        # Evaluation Metrics Table
+        f.write("""
+    <div class="card" id="metrics">
+        <h2>Evaluation Metrics</h2>
+        <h3>Metrics Over Training</h3>
+        <div style="overflow-x: auto;">
+            <table>
+                <tr>
+                    <th>Step</th>
+                    <th>MSE</th>
+                    <th>MAE</th>
+                    <th>Success@0.05</th>
+                    <th>Success@0.10</th>
+                    <th>Success@0.20</th>
+                    <th>Base MAE</th>
+                    <th>Left Arm MAE</th>
+                    <th>Right Arm MAE</th>
+                </tr>
+""")
+        for idx, row in df.iterrows():
+            highlight = "highlight-row" if idx == best_mae_idx else ""
+            f.write(f"""                <tr class="{highlight}">
+                    <td>{int(row['Step'])}</td>
+                    <td>{row['MSE']:.4f}</td>
+                    <td>{row['MAE']:.4f}</td>
+                    <td>{row['Success@0.05']:.1f}%</td>
+                    <td>{row['Success@0.10']:.1f}%</td>
+                    <td>{row['Success@0.20']:.1f}%</td>
+                    <td>{row['Base MAE']:.4f}</td>
+                    <td>{row['Left Arm MAE']:.4f}</td>
+                    <td>{row['Right Arm MAE']:.4f}</td>
+                </tr>
+""")
+        f.write("""
+            </table>
+        </div>
+
+        <h3>Best Checkpoints</h3>
+        <ul class="info-list">
+""")
+        f.write(f"""            <li><strong>Lowest MSE:</strong> Step {int(df.loc[best_mse_idx, 'Step'])} (MSE = {df.loc[best_mse_idx, 'MSE']:.6f})</li>
+            <li><strong>Lowest MAE:</strong> Step {int(df.loc[best_mae_idx, 'Step'])} (MAE = {df.loc[best_mae_idx, 'MAE']:.6f}) <span class="badge badge-success">Best</span></li>
+            <li><strong>Highest Success@0.10:</strong> Step {int(df.loc[best_success_idx, 'Step'])} ({df.loc[best_success_idx, 'Success@0.10']:.1f}%)</li>
+""")
+        f.write("""
+        </ul>
+    </div>
+""")
+
+        # Plots
+        f.write("""
+    <div class="card" id="plots">
+        <h2>Visualization Plots</h2>
+
+        <h3>Training Overview</h3>
+        <div class="plot-container large">
+""")
+        overview_b64 = encode_image(output_dir / 'training_overview.png')
+        f.write(f'            <img src="data:image/png;base64,{overview_b64}" alt="Training Overview">\n')
+        f.write("""
+        </div>
+
+        <div class="grid-2">
+            <div class="plot-container">
+                <div class="plot-title">Evaluation Loss Curves</div>
+""")
+        eval_loss_b64 = encode_image(output_dir / 'eval_loss_curves.png')
+        f.write(f'                <img src="data:image/png;base64,{eval_loss_b64}" alt="Eval Loss Curves">\n')
+        f.write("""
+            </div>
+            <div class="plot-container">
+                <div class="plot-title">Success Rates</div>
+""")
+        success_b64 = encode_image(output_dir / 'success_rates.png')
+        f.write(f'                <img src="data:image/png;base64,{success_b64}" alt="Success Rates">\n')
+        f.write("""
+            </div>
+            <div class="plot-container">
+                <div class="plot-title">Accuracy Rates</div>
+""")
+        accuracy_b64 = encode_image(output_dir / 'accuracy_rates.png')
+        f.write(f'                <img src="data:image/png;base64,{accuracy_b64}" alt="Accuracy Rates">\n')
+        f.write("""
+            </div>
+            <div class="plot-container">
+                <div class="plot-title">Per-Component MAE</div>
+""")
+        component_b64 = encode_image(output_dir / 'component_mae.png')
+        f.write(f'                <img src="data:image/png;base64,{component_b64}" alt="Component MAE">\n')
+        f.write("""
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>Generated by GR00T Finetuning Pipeline • <a href="training_report.md">View Markdown Report</a> • <a href="checkpoint_summary.csv">Download CSV</a></p>
+    </footer>
+</div>
+</body>
+</html>
+""")
+
+    print(f"  Saved: training_report.html")
 
 
 def main():
@@ -718,7 +1159,9 @@ def main():
     print("COMPLETE")
     print(f"=" * 60)
     print(f"Results saved to: {eval_dir}")
-    print(f"\nView the full report: {eval_dir}/training_report.md")
+    print(f"\nView reports:")
+    print(f"  HTML: {eval_dir}/training_report.html")
+    print(f"  Markdown: {eval_dir}/training_report.md")
 
 
 if __name__ == "__main__":
