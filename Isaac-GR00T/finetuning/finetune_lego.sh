@@ -11,14 +11,19 @@
 #
 # For multi-GPU training (recommended):
 #   ./finetuning/finetune_lego.sh 4
+#
+# With additional options:
+#   ./finetuning/finetune_lego.sh 4 --max-steps 5000
 
 set -e
 
 # Default settings
 NUM_GPUS=${1:-4}
+shift 2>/dev/null || true  # Remove first arg from $@ if present
 DATASET_PATH="${DATASET_PATH:-./data/lego_train}"
 BASE_MODEL="${BASE_MODEL:-nvidia/GR00T-N1.6-3B}"
 OUTPUT_DIR="${OUTPUT_DIR:-./outputs/lego}"
+SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-20}"
 
 echo "=================================================="
 echo "LEGO Manipulation GR00T Finetuning"
@@ -27,6 +32,7 @@ echo "Dataset: ${DATASET_PATH}"
 echo "Base Model: ${BASE_MODEL}"
 echo "Output: ${OUTPUT_DIR}"
 echo "GPUs: ${NUM_GPUS}"
+echo "Save Total Limit: ${SAVE_TOTAL_LIMIT}"
 echo "=================================================="
 
 # Check if dataset exists
@@ -60,6 +66,7 @@ torchrun --nproc_per_node=${NUM_GPUS} --standalone \
     --dataset-path "${DATASET_PATH}" \
     --base-model-path "${BASE_MODEL}" \
     --output-dir "${OUTPUT_DIR}" \
+    --save-total-limit "${SAVE_TOTAL_LIMIT}" \
     "$@"
 
 echo ""
