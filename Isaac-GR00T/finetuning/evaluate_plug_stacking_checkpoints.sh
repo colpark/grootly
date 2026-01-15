@@ -75,6 +75,7 @@ for STEP in ${STEPS}; do
     echo "=================================================="
 
     OUTPUT_STEP="${OUTPUT_BASE}/step_${STEP}"
+    mkdir -p "${OUTPUT_STEP}"
 
     python finetuning/evaluate_plug_stacking.py \
         --checkpoint_path "${CHECKPOINT}" \
