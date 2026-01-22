@@ -279,6 +279,9 @@ def test_model_loading(task: str, checkpoint_path: Optional[str], device: str) -
         }
         checkpoint_path = task_checkpoints.get(task, task_checkpoints["lego"])
 
+    # Convert to absolute path (required for transformers to recognize as local path)
+    checkpoint_path = os.path.abspath(checkpoint_path)
+
     print(f"  Loading model from: {checkpoint_path}")
     print(f"  Device: {device}")
 
@@ -358,6 +361,9 @@ def test_dummy_inference(task: str, checkpoint_path: Optional[str], device: str)
             "plug_stacking": "./outputs/plug_stacking/checkpoint-10000",
         }
         checkpoint_path = task_checkpoints.get(task, task_checkpoints["lego"])
+
+    # Convert to absolute path (required for transformers to recognize as local path)
+    checkpoint_path = os.path.abspath(checkpoint_path)
 
     print(f"  Running inference test...")
 
