@@ -153,6 +153,10 @@ pip install \
     huggingface-hub
 
 echo ""
+echo "Installing communication dependencies..."
+pip install pyzmq msgpack msgpack-numpy
+
+echo ""
 echo "Installing deepspeed..."
 pip install deepspeed==0.17.6 || echo "WARNING: deepspeed install failed, continuing..."
 
