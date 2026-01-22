@@ -1,6 +1,6 @@
 # GR00T Server Installation Guide (CUDA 12.x)
 
-This guide covers installing GR00T on a server with CUDA 12.x (supports 12.1, 12.4, 12.6).
+This guide covers installing GR00T on a server with CUDA 12.x (supports 12.1, 12.4, 12.6, 12.8).
 
 ## Prerequisites
 
@@ -99,12 +99,14 @@ source .venv/bin/activate
 
 # Install core dependencies without flash-attn
 # Choose the appropriate CUDA version for your system:
-# For CUDA 12.1:
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu121
-# For CUDA 12.4:
-# pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu124
+# For CUDA 12.8 (recommended for newer systems):
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 # For CUDA 12.6:
-# pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
+# pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu126
+# For CUDA 12.4:
+# pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu124
+# For CUDA 12.1:
+# pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu121
 
 pip install \
     transformers==4.51.3 \
@@ -223,14 +225,17 @@ Options:
 Install PyTorch with CUDA support (choose your CUDA version):
 
 ```bash
-# For CUDA 12.1:
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu121
-
-# For CUDA 12.4:
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu124
+# For CUDA 12.8 (recommended):
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 
 # For CUDA 12.6:
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu126
+
+# For CUDA 12.4:
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu124
+
+# For CUDA 12.1:
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### Error: Out of memory

@@ -66,10 +66,11 @@ else
         12.1*) CUDA_VERSION="12.1" ;;
         12.2*|12.3*) CUDA_VERSION="12.1" ;;  # Use 12.1 for 12.2/12.3
         12.4*|12.5*) CUDA_VERSION="12.4" ;;  # Use 12.4 for 12.4/12.5
-        12.6*|12.7*|12.8*|12.9*) CUDA_VERSION="12.4" ;;  # Use 12.4 for 12.6+
+        12.6*|12.7*) CUDA_VERSION="12.6" ;;  # Use 12.6 for 12.6/12.7
+        12.8*|12.9*|13.*) CUDA_VERSION="12.8" ;;  # Use 12.8 for 12.8+
         *)
-            echo "WARNING: Unrecognized CUDA version $DETECTED_CUDA, defaulting to 12.1"
-            CUDA_VERSION="12.1"
+            echo "WARNING: Unrecognized CUDA version $DETECTED_CUDA, defaulting to 12.8"
+            CUDA_VERSION="12.8"
             ;;
     esac
     echo "Selected PyTorch CUDA version: $CUDA_VERSION"
@@ -89,9 +90,13 @@ case "$CUDA_VERSION" in
         PYTORCH_INDEX="https://download.pytorch.org/whl/cu126"
         FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
         ;;
+    12.8)
+        PYTORCH_INDEX="https://download.pytorch.org/whl/cu128"
+        FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+        ;;
     *)
         echo "ERROR: Unsupported CUDA version $CUDA_VERSION"
-        echo "Supported versions: 12.1, 12.4, 12.6"
+        echo "Supported versions: 12.1, 12.4, 12.6, 12.8"
         exit 1
         ;;
 esac
@@ -108,7 +113,7 @@ pip install --upgrade pip wheel setuptools
 
 echo ""
 echo "Installing PyTorch with CUDA $CUDA_VERSION..."
-pip install torch==2.7.0 torchvision==0.22.0 --index-url "$PYTORCH_INDEX"
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url "$PYTORCH_INDEX"
 
 # Verify PyTorch CUDA
 python -c "
@@ -119,31 +124,34 @@ print(f'PyTorch {torch.__version__} with CUDA {torch.version.cuda}')
 
 echo ""
 echo "Installing core dependencies..."
+# Versions aligned with working conda environment
 pip install \
+    numpy==1.23.5 \
     transformers==4.51.3 \
-    diffusers==0.35.1 \
-    peft==0.17.1 \
-    accelerate \
+    diffusers==0.30.2 \
+    peft==0.17.0 \
+    accelerate==1.2.1 \
     einops==0.8.1 \
     omegaconf==2.3.0 \
     tyro==0.9.17 \
     pandas==2.2.3 \
-    numpy==1.26.4 \
-    scipy==1.15.3 \
-    matplotlib==3.10.1 \
-    pyzmq==27.0.1 \
-    msgpack==1.1.0 \
-    msgpack-numpy==0.4.8 \
+    scipy \
+    matplotlib==3.10.0 \
+    pyzmq \
+    msgpack==1.1.2 \
+    msgpack-numpy \
     albumentations==1.4.18 \
-    av==15.0.0 \
-    lmdb==1.7.5 \
+    av==12.3.0 \
+    lmdb \
     dm-tree==0.1.8 \
     termcolor==3.2.0 \
-    click==8.1.8 \
-    datasets==3.6.0 \
-    gymnasium==1.2.2 \
-    wandb==0.23.0 \
-    torchcodec==0.4.0
+    click==8.3.1 \
+    datasets==4.1.1 \
+    gymnasium==1.0.0 \
+    wandb==0.18.0 \
+    torchcodec==0.1.0 \
+    safetensors==0.7.0 \
+    huggingface-hub
 
 echo ""
 echo "Installing deepspeed..."
