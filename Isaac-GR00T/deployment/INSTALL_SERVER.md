@@ -1,6 +1,6 @@
 # GR00T Server Installation Guide (CUDA 12.x)
 
-This guide covers installing GR00T on a server with CUDA 12.x (tested with CUDA 12.6).
+This guide covers installing GR00T on a server with CUDA 12.x (supports 12.1, 12.4, 12.6).
 
 ## Prerequisites
 
@@ -98,7 +98,13 @@ python3.10 -m venv .venv
 source .venv/bin/activate
 
 # Install core dependencies without flash-attn
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
+# Choose the appropriate CUDA version for your system:
+# For CUDA 12.1:
+pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu121
+# For CUDA 12.4:
+# pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu124
+# For CUDA 12.6:
+# pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
 
 pip install \
     transformers==4.51.3 \
@@ -214,9 +220,16 @@ Options:
 
 ### Error: torch not compiled with CUDA
 
-Install PyTorch with CUDA support:
+Install PyTorch with CUDA support (choose your CUDA version):
 
 ```bash
+# For CUDA 12.1:
+pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu121
+
+# For CUDA 12.4:
+pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu124
+
+# For CUDA 12.6:
 pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
 ```
 
@@ -247,9 +260,10 @@ echo "Creating virtual environment..."
 python3.10 -m venv .venv
 source .venv/bin/activate
 
-# Install PyTorch with CUDA
+# Install PyTorch with CUDA (auto-detects version)
 echo "Installing PyTorch..."
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
+# Script auto-detects CUDA version, or set manually:
+# CUDA_VERSION=12.1 ./install_groot.sh
 
 # Install other dependencies
 echo "Installing dependencies..."

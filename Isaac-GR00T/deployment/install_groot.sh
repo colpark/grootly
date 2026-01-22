@@ -2,7 +2,10 @@
 # GR00T Installation Script for CUDA 12.x Servers
 #
 # Usage:
-#   ./deployment/install_groot.sh
+#   ./deployment/install_groot.sh           # Auto-detect CUDA version
+#   CUDA_VERSION=12.1 ./deployment/install_groot.sh  # Force specific version
+#
+# Supported CUDA versions: 12.1, 12.4, 12.6
 #
 # This script installs GR00T dependencies without requiring nvcc
 # by using pre-built wheels and pip instead of uv sync.
@@ -42,15 +45,57 @@ else
     done
 fi
 
-# Check nvidia-smi
+# Check nvidia-smi and detect CUDA version
 if command -v nvidia-smi &> /dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
     DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
+    DETECTED_CUDA=$(nvidia-smi | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+")
     echo "GPU: $GPU_NAME (Driver: $DRIVER_VERSION)"
+    echo "Detected CUDA: $DETECTED_CUDA"
 else
     echo "ERROR: nvidia-smi not found. NVIDIA drivers not installed?"
     exit 1
 fi
+
+# Determine CUDA version to use
+if [[ -n "${CUDA_VERSION:-}" ]]; then
+    echo "Using user-specified CUDA version: $CUDA_VERSION"
+else
+    # Map detected CUDA to supported PyTorch CUDA version
+    case "$DETECTED_CUDA" in
+        12.1*) CUDA_VERSION="12.1" ;;
+        12.2*|12.3*) CUDA_VERSION="12.1" ;;  # Use 12.1 for 12.2/12.3
+        12.4*|12.5*) CUDA_VERSION="12.4" ;;  # Use 12.4 for 12.4/12.5
+        12.6*|12.7*|12.8*|12.9*) CUDA_VERSION="12.4" ;;  # Use 12.4 for 12.6+
+        *)
+            echo "WARNING: Unrecognized CUDA version $DETECTED_CUDA, defaulting to 12.1"
+            CUDA_VERSION="12.1"
+            ;;
+    esac
+    echo "Selected PyTorch CUDA version: $CUDA_VERSION"
+fi
+
+# Set PyTorch index URL based on CUDA version
+case "$CUDA_VERSION" in
+    12.1)
+        PYTORCH_INDEX="https://download.pytorch.org/whl/cu121"
+        FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+        ;;
+    12.4)
+        PYTORCH_INDEX="https://download.pytorch.org/whl/cu124"
+        FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+        ;;
+    12.6)
+        PYTORCH_INDEX="https://download.pytorch.org/whl/cu126"
+        FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+        ;;
+    *)
+        echo "ERROR: Unsupported CUDA version $CUDA_VERSION"
+        echo "Supported versions: 12.1, 12.4, 12.6"
+        exit 1
+        ;;
+esac
+echo "PyTorch index: $PYTORCH_INDEX"
 
 echo ""
 echo "Creating virtual environment..."
@@ -62,8 +107,8 @@ echo "Upgrading pip..."
 pip install --upgrade pip wheel setuptools
 
 echo ""
-echo "Installing PyTorch with CUDA 12.6..."
-pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu126
+echo "Installing PyTorch with CUDA $CUDA_VERSION..."
+pip install torch==2.7.0 torchvision==0.22.0 --index-url "$PYTORCH_INDEX"
 
 # Verify PyTorch CUDA
 python -c "
@@ -106,8 +151,8 @@ pip install deepspeed==0.17.6 || echo "WARNING: deepspeed install failed, contin
 
 echo ""
 echo "Installing flash-attn..."
-# Try pre-built wheel first
-FLASH_ATTN_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+# Try pre-built wheel first (FLASH_ATTN_WHEEL was set based on CUDA version)
+echo "Trying wheel: $FLASH_ATTN_WHEEL"
 
 if pip install "$FLASH_ATTN_WHEEL" 2>/dev/null; then
     echo "flash-attn installed from pre-built wheel"
