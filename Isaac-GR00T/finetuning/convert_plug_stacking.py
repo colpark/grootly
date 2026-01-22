@@ -451,7 +451,7 @@ def main():
     parser.add_argument(
         "--input_base",
         type=str,
-        default="./data/lerobot_dataset/lerobot/recorded_data",
+        default="./data/lerobot_dataset/lerobot/recorded_data/plug_stacking_data",
         help="Base path containing plug_stacking_v1 through v5",
     )
     parser.add_argument(
