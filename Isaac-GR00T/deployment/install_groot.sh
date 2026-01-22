@@ -124,9 +124,8 @@ print(f'PyTorch {torch.__version__} with CUDA {torch.version.cuda}')
 
 echo ""
 echo "Installing core dependencies..."
-# Versions aligned with working conda environment
+# Let pip resolve numpy version (albumentations requires >=1.24.4)
 pip install \
-    numpy==1.23.5 \
     transformers==4.51.3 \
     diffusers==0.30.2 \
     peft==0.17.0 \
@@ -138,19 +137,19 @@ pip install \
     scipy \
     matplotlib==3.10.0 \
     pyzmq \
-    msgpack==1.1.2 \
+    msgpack \
     msgpack-numpy \
     albumentations==1.4.18 \
     av==12.3.0 \
     lmdb \
     dm-tree==0.1.8 \
     termcolor==3.2.0 \
-    click==8.3.1 \
-    datasets==4.1.1 \
+    click \
+    datasets \
     gymnasium==1.0.0 \
     wandb==0.18.0 \
-    torchcodec==0.1.0 \
-    safetensors==0.7.0 \
+    torchcodec \
+    safetensors \
     huggingface-hub
 
 echo ""
