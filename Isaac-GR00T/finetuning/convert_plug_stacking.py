@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Convert plug_stacking dataset to GR00T format for finetuning.
+Convert plug_stacking dataset (v1-v5) to GR00T format for finetuning.
 
 This script converts the Trossen AI Mobile bimanual robot plug stacking dataset
-(LeRobot v2 format) to GR00T-compatible format with train/test splits.
+(LeRobot v2 format, 5 versions) to GR00T-compatible format with train/test splits.
 
 Dataset characteristics:
 - Robot: Trossen AI Mobile (bimanual mobile robot) - same as ball2_groot
+- 5 versions: v1(3), v2(6), v3(17), v4(10), v5(20) = 56 total episodes
 - 3 cameras: cam_high, cam_left_wrist, cam_right_wrist
 - State: 19 DOF (odom_x, odom_y, odom_theta, linear_vel, angular_vel, 7 left joints, 7 right joints)
 - Action: 16 DOF (linear_vel, angular_vel, 7 left joints, 7 right joints)
@@ -16,11 +17,11 @@ Dataset characteristics:
 Usage:
     python finetuning/convert_plug_stacking.py
 
-    # Custom paths
+    # Custom settings
     python finetuning/convert_plug_stacking.py \
-        --input_path ./data/lerobot_dataset/lerobot/recorded_data/plug_stacking \
+        --input_base ./inhouse/lerobot_dataset/lerobot/recorded_data/plug_stacking_data \
         --output_base ./data \
-        --train_episodes 19
+        --test_episodes 10
 """
 
 import argparse
@@ -64,6 +65,10 @@ ACTION_INDICES = {
 
 # Components that use relative action representation
 RELATIVE_ACTION_KEYS = ["left_arm", "right_arm"]
+
+# Version directories
+VERSIONS = ["plug_stacking_v1", "plug_stacking_v2", "plug_stacking_v3",
+            "plug_stacking_v4", "plug_stacking_v5"]
 
 
 def compute_resample_indices(num_frames: int, source_fps: int, target_fps: int) -> list[int]:
@@ -412,13 +417,42 @@ def create_metadata(
     print(f"  Created metadata: {num_episodes} episodes, {total_frames} frames")
 
 
+def collect_all_episodes(input_base: Path) -> list[tuple[Path, int]]:
+    """Collect all episode references from all versions."""
+    all_episodes = []
+
+    for version in VERSIONS:
+        version_path = input_base / version
+        if not version_path.exists():
+            print(f"Warning: Version not found: {version_path}")
+            continue
+
+        # Read info to get episode count
+        info_file = version_path / "meta" / "info.json"
+        if not info_file.exists():
+            print(f"Warning: info.json not found for {version}")
+            continue
+
+        with open(info_file) as f:
+            info = json.load(f)
+
+        num_episodes = info["total_episodes"]
+
+        for ep_idx in range(num_episodes):
+            all_episodes.append((version_path, ep_idx))
+
+        print(f"  {version}: {num_episodes} episodes")
+
+    return all_episodes
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Convert plug_stacking to GR00T format")
+    parser = argparse.ArgumentParser(description="Convert plug_stacking (v1-v5) to GR00T format")
     parser.add_argument(
-        "--input_path",
+        "--input_base",
         type=str,
-        default="./data/lerobot_dataset/lerobot/recorded_data/plug_stacking",
-        help="Path to source plug_stacking dataset",
+        default="./data/lerobot_dataset/lerobot/recorded_data",
+        help="Base path containing plug_stacking_v1 through v5",
     )
     parser.add_argument(
         "--output_base",
@@ -427,16 +461,16 @@ def main():
         help="Base path for output datasets",
     )
     parser.add_argument(
-        "--train_episodes",
-        type=int,
-        default=19,
-        help="Number of training episodes (default: 19)",
-    )
-    parser.add_argument(
         "--test_episodes",
         type=int,
-        default=5,
-        help="Number of test episodes (default: 5)",
+        default=10,
+        help="Number of test episodes (randomly selected, default: 10)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for train/test split",
     )
     parser.add_argument(
         "--log_file",
@@ -446,7 +480,7 @@ def main():
     )
     args = parser.parse_args()
 
-    input_path = Path(args.input_path)
+    input_base = Path(args.input_base)
     output_base = Path(args.output_base)
 
     # Setup logging
@@ -467,48 +501,39 @@ def main():
 
     print(f"Plug Stacking GR00T Conversion Log")
     print(f"=" * 60)
-    print(f"Input: {input_path}")
+    print(f"Input base: {input_base}")
     print(f"Output: {output_base}")
-    print(f"Train episodes: {args.train_episodes}")
     print(f"Test episodes: {args.test_episodes}")
+    print(f"Random seed: {args.seed}")
     print(f"=" * 60)
 
-    # Read task description
-    tasks_file = input_path / "meta" / "tasks.jsonl"
-    if tasks_file.exists():
-        with open(tasks_file) as f:
-            task_info = json.loads(f.readline())
-            task_description = task_info.get("task", "Stack the plugs")
-    else:
-        task_description = "Stack the plugs"
+    # Task description
+    task_description = "Plug stacking"
 
-    print(f"Task: {task_description}")
+    # Collect all episodes from all versions
+    print("\nCollecting episodes from all versions...")
+    all_episodes = collect_all_episodes(input_base)
+    total_episodes = len(all_episodes)
+    print(f"Total episodes across all versions: {total_episodes}")
 
-    # Read episode info
-    info_file = input_path / "meta" / "info.json"
-    with open(info_file) as f:
-        info = json.load(f)
+    if total_episodes == 0:
+        print("ERROR: No episodes found!")
+        sys.exit(1)
 
-    total_episodes = info["total_episodes"]
-    print(f"Total source episodes: {total_episodes}")
+    if args.test_episodes >= total_episodes:
+        print(f"ERROR: test_episodes ({args.test_episodes}) >= total ({total_episodes})")
+        sys.exit(1)
 
-    # Validate episode counts
-    requested_total = args.train_episodes + args.test_episodes
-    if requested_total > total_episodes:
-        print(f"WARNING: Requested {requested_total} episodes but only {total_episodes} available")
-        print(f"  Adjusting to use all {total_episodes} episodes")
-        if total_episodes <= args.test_episodes:
-            args.test_episodes = max(1, total_episodes // 5)
-        args.train_episodes = total_episodes - args.test_episodes
-
-    # Create episode splits
+    # Random train/test split
+    random.seed(args.seed)
     all_indices = list(range(total_episodes))
-    train_eps = all_indices[:args.train_episodes]
-    test_eps = all_indices[args.train_episodes:args.train_episodes + args.test_episodes]
+    random.shuffle(all_indices)
 
-    print(f"\nSplit: {len(train_eps)} train / {len(test_eps)} test")
-    print(f"Train episodes: {train_eps}")
-    print(f"Test episodes: {test_eps}")
+    test_indices = set(all_indices[:args.test_episodes])
+    train_indices = [i for i in range(total_episodes) if i not in test_indices]
+
+    print(f"\nSplit: {len(train_indices)} train / {len(test_indices)} test")
+    print(f"Test episode indices (in combined list): {sorted(test_indices)}")
 
     # Convert training set
     print("\n" + "=" * 60)
@@ -523,11 +548,12 @@ def main():
     train_states = []
     train_actions = []
 
-    for new_idx, orig_idx in enumerate(train_eps):
-        print(f"\n[Train {new_idx}] From episode {orig_idx}")
+    for new_idx, orig_idx in enumerate(train_indices):
+        source_path, source_ep_idx = all_episodes[orig_idx]
+        print(f"\n[Train {new_idx}] From {source_path.name} episode {source_ep_idx}")
 
         ep_info, states, actions = convert_episode(
-            input_path, train_output, orig_idx, new_idx, task_description
+            source_path, train_output, source_ep_idx, new_idx, task_description
         )
         if ep_info:
             train_infos.append(ep_info)
@@ -558,11 +584,12 @@ def main():
     test_states = []
     test_actions = []
 
-    for new_idx, orig_idx in enumerate(test_eps):
-        print(f"\n[Test {new_idx}] From episode {orig_idx}")
+    for new_idx, orig_idx in enumerate(sorted(test_indices)):
+        source_path, source_ep_idx = all_episodes[orig_idx]
+        print(f"\n[Test {new_idx}] From {source_path.name} episode {source_ep_idx}")
 
         ep_info, states, actions = convert_episode(
-            input_path, test_output, orig_idx, new_idx, task_description
+            source_path, test_output, source_ep_idx, new_idx, task_description
         )
         if ep_info:
             test_infos.append(ep_info)
