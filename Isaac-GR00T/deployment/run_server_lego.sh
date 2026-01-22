@@ -70,10 +70,11 @@ exec(open('${MODALITY_CONFIG}').read())
 
 # Start the server
 from gr00t.eval.run_gr00t_server import main, ServerConfig
+from gr00t.data.embodiment_tags import EmbodimentTag
 
 config = ServerConfig(
     model_path='${CHECKPOINT}',
-    embodiment_tag='NEW_EMBODIMENT',
+    embodiment_tag=EmbodimentTag.NEW_EMBODIMENT,
     device='${DEVICE}',
     host='${HOST}',
     port=${PORT},
