@@ -358,21 +358,20 @@ class TrossenRobotInterface:
         return {"cameras": cameras, "state": state}
 
     # Motor position limits (radians) for Trossen AI arms
-    # These are conservative limits to prevent out-of-bounds errors
-    JOINT_LIMITS = {
-        # [min, max] in radians for each joint
-        # Joints 0-5: arm joints, Joint 6: gripper
-        "default": [-3.14, 3.14],  # ~180 degrees each way
-        "gripper": [0.0, 1.0],     # gripper range
-    }
-    # Instead of absolute position limits, limit the CHANGE per step
-    # This prevents sudden jumps that exceed motor velocity limits
+    # CRITICAL: Must limit BOTH delta per step AND absolute position
+    # Delta limits prevent velocity errors, absolute limits prevent runaway
+
+    # ABSOLUTE position limits for arm joints (indices 0-5)
+    # These prevent the arms from spinning too far from initial position
+    # Reasonable manipulation range is about ±1.5 radians (~85 degrees)
+    MAX_ARM_POSITION = 1.5   # Max absolute position for arm joints
+    MIN_ARM_POSITION = -1.5  # Min absolute position for arm joints
+
+    # DELTA limits - maximum change per control step
     MAX_DELTA_PER_STEP = 0.05  # Maximum change in radians per control step
-    # Note: MAX_GRIPPER_DELTA is defined below with gripper limits
 
     # CRITICAL: Gripper (Motor 6) has VERY tight position limits!
     # Actual motor limits from error log: [-0.004, 0.044] radians
-    # Use conservative values to stay within limits
     MAX_GRIPPER_POSITION = 0.04  # Max gripper position (limit is 0.044)
     MIN_GRIPPER_POSITION = 0.0   # Min gripper position (limit is -0.004, use 0 for safety)
     MAX_GRIPPER_DELTA = 0.005    # Slower gripper movement to avoid velocity issues
@@ -429,9 +428,12 @@ class TrossenRobotInterface:
         left_arm_clamped = prev_left + left_delta
         right_arm_clamped = prev_right + right_delta
 
-        # CRITICAL: Apply absolute gripper position limits
-        # The gripper motor has ~78x internal scaling (12.5 rad motor limit / 78 = 0.16 rad max)
-        # Clamp gripper to safe absolute range AFTER delta application
+        # CRITICAL: Apply absolute position limits to prevent runaway
+        # ARM JOINTS (indices 0-5): Limit to safe manipulation range
+        left_arm_clamped[:6] = np.clip(left_arm_clamped[:6], self.MIN_ARM_POSITION, self.MAX_ARM_POSITION)
+        right_arm_clamped[:6] = np.clip(right_arm_clamped[:6], self.MIN_ARM_POSITION, self.MAX_ARM_POSITION)
+
+        # GRIPPER (index 6): Very tight limits from motor error log
         left_arm_clamped[6] = np.clip(left_arm_clamped[6], self.MIN_GRIPPER_POSITION, self.MAX_GRIPPER_POSITION)
         right_arm_clamped[6] = np.clip(right_arm_clamped[6], self.MIN_GRIPPER_POSITION, self.MAX_GRIPPER_POSITION)
 
