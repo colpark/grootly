@@ -342,6 +342,16 @@ class TrossenRobotInterface:
         state = np.zeros(19, dtype=np.float32)
         return {"cameras": cameras, "state": state}
 
+    # Motor position limits (radians) for Trossen AI arms
+    # These are conservative limits to prevent out-of-bounds errors
+    JOINT_LIMITS = {
+        # [min, max] in radians for each joint
+        # Joints 0-5: arm joints, Joint 6: gripper
+        "default": [-3.14, 3.14],  # ~180 degrees each way
+        "gripper": [0.0, 1.0],     # gripper range
+    }
+    MAX_JOINT_POSITION = 12.0  # Maximum absolute joint position (radians)
+
     def send_action(self, action: Dict[str, np.ndarray]):
         """
         Send action command to robot actuators.
@@ -360,10 +370,25 @@ class TrossenRobotInterface:
         base_vel[0] = np.clip(base_vel[0], -self.config.max_base_linear_vel, self.config.max_base_linear_vel)
         base_vel[1] = np.clip(base_vel[1], -self.config.max_base_angular_vel, self.config.max_base_angular_vel)
 
+        # Apply safety limits to arm joint positions
+        left_arm = action["left_arm"].copy()
+        right_arm = action["right_arm"].copy()
+
+        # Clamp all joint positions to safe range
+        left_arm = np.clip(left_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+        right_arm = np.clip(right_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+
+        # Log if any values were clamped
+        if self.config.verbose or np.any(action["left_arm"] != left_arm) or np.any(action["right_arm"] != right_arm):
+            if np.any(action["left_arm"] != left_arm):
+                logger.warning(f"Left arm clamped: {action['left_arm']} -> {left_arm}")
+            if np.any(action["right_arm"] != right_arm):
+                logger.warning(f"Right arm clamped: {action['right_arm']} -> {right_arm}")
+
         if self.config.verbose:
             logger.debug(f"Sending action - base_vel: {base_vel}")
-            logger.debug(f"  left_arm: {action['left_arm']}")
-            logger.debug(f"  right_arm: {action['right_arm']}")
+            logger.debug(f"  left_arm: {left_arm}")
+            logger.debug(f"  right_arm: {right_arm}")
 
         if self.config.dry_run or self._use_mock:
             return
@@ -379,9 +404,9 @@ class TrossenRobotInterface:
 
         lerobot_action = torch.tensor(
             np.concatenate([
-                action["left_arm"],    # 7 joints
-                action["right_arm"],   # 7 joints
-                base_vel,              # [linear_vel, angular_vel]
+                left_arm,    # 7 joints (clamped)
+                right_arm,   # 7 joints (clamped)
+                base_vel,    # [linear_vel, angular_vel]
             ]),
             dtype=torch.float32
         )
