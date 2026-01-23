@@ -2,6 +2,8 @@
 """
 Trossen AI Mobile Robot Client for GR00T Policy Server
 
+VERSION: 2.1 - Added relative-to-absolute action conversion and safety clamping
+
 This script runs on the robot's computer and connects to a remote
 GR00T inference server to get action predictions in real-time.
 
@@ -363,7 +365,8 @@ class TrossenRobotInterface:
         "default": [-3.14, 3.14],  # ~180 degrees each way
         "gripper": [0.0, 1.0],     # gripper range
     }
-    MAX_JOINT_POSITION = 12.0  # Maximum absolute joint position (radians)
+    # Motor limit is [-12.5, 12.5] - use 10.0 for extra safety margin
+    MAX_JOINT_POSITION = 10.0  # Conservative limit well below motor max of 12.5
 
     def send_action(self, action: Dict[str, np.ndarray]):
         """
@@ -419,10 +422,20 @@ class TrossenRobotInterface:
         self._current_left_arm = left_arm.copy()
         self._current_right_arm = right_arm.copy()
 
-        if self.config.verbose:
-            logger.debug(f"Sending action - base_vel: {base_vel}")
-            logger.debug(f"  left_arm delta: {left_arm_delta} -> absolute: {left_arm}")
-            logger.debug(f"  right_arm delta: {right_arm_delta} -> absolute: {right_arm}")
+        # ALWAYS log first few actions to help debug issues
+        if not hasattr(self, '_action_count'):
+            self._action_count = 0
+        self._action_count += 1
+
+        if self._action_count <= 5 or self.config.verbose:
+            logger.info(f"Action #{self._action_count}:")
+            logger.info(f"  current_left:  {self._current_left_arm}")
+            logger.info(f"  current_right: {self._current_right_arm}")
+            logger.info(f"  delta_left:    {left_arm_delta}")
+            logger.info(f"  delta_right:   {right_arm_delta}")
+            logger.info(f"  absolute_left: {left_arm}")
+            logger.info(f"  absolute_right:{right_arm}")
+            logger.info(f"  base_vel:      {base_vel}")
 
         if self.config.dry_run or self._use_mock:
             return
@@ -436,6 +449,19 @@ class TrossenRobotInterface:
         if self.config.disable_base or self.config.arms_only:
             base_vel = np.zeros(2, dtype=np.float32)
 
+        # FINAL SAFETY CHECK - clamp again right before sending
+        # This catches any bugs in the logic above
+        HARD_LIMIT = 10.0
+        left_arm = np.clip(left_arm, -HARD_LIMIT, HARD_LIMIT)
+        right_arm = np.clip(right_arm, -HARD_LIMIT, HARD_LIMIT)
+
+        # Verify values are in bounds before sending
+        if np.any(np.abs(left_arm) > HARD_LIMIT) or np.any(np.abs(right_arm) > HARD_LIMIT):
+            logger.error(f"SAFETY VIOLATION: Values still out of bounds after clamping!")
+            logger.error(f"  left_arm: {left_arm}")
+            logger.error(f"  right_arm: {right_arm}")
+            return  # Don't send dangerous commands
+
         lerobot_action = torch.tensor(
             np.concatenate([
                 left_arm,    # 7 joints (clamped)
@@ -444,6 +470,10 @@ class TrossenRobotInterface:
             ]),
             dtype=torch.float32
         )
+
+        # Log what we're actually sending
+        if self._action_count <= 3:
+            logger.info(f"Sending to robot: {lerobot_action.numpy()}")
 
         # Send to robot
         try:
@@ -711,6 +741,7 @@ Examples:
     # Print configuration
     logger.info("=" * 50)
     logger.info("Trossen AI Mobile - GR00T Policy Client")
+    logger.info("VERSION: 2.1 - Relative action conversion + safety clamping")
     logger.info("=" * 50)
     logger.info(f"Server: tcp://{config.server_ip}:{config.server_port}")
     logger.info(f"Task: {config.task_instruction}")
