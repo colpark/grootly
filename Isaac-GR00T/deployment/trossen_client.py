@@ -368,14 +368,14 @@ class TrossenRobotInterface:
     # Instead of absolute position limits, limit the CHANGE per step
     # This prevents sudden jumps that exceed motor velocity limits
     MAX_DELTA_PER_STEP = 0.05  # Maximum change in radians per control step
-    MAX_GRIPPER_DELTA = 0.02  # Gripper moves slower to avoid velocity errors
+    # Note: MAX_GRIPPER_DELTA is defined below with gripper limits
 
-    # CRITICAL: Gripper has ~78x internal scaling in the motor driver!
-    # Motor limit is 12.5 rad, so max gripper position = 12.5/78 ≈ 0.16 rad
-    # Use 0.14 for safety margin
-    GRIPPER_SCALING_FACTOR = 78.0  # Internal motor scaling for gripper
-    MAX_GRIPPER_POSITION = 0.14  # Max absolute gripper position (0.14 * 78 = 10.9 rad at motor)
-    MIN_GRIPPER_POSITION = -0.14  # Min absolute gripper position
+    # CRITICAL: Gripper (Motor 6) has VERY tight position limits!
+    # Actual motor limits from error log: [-0.004, 0.044] radians
+    # Use conservative values to stay within limits
+    MAX_GRIPPER_POSITION = 0.04  # Max gripper position (limit is 0.044)
+    MIN_GRIPPER_POSITION = 0.0   # Min gripper position (limit is -0.004, use 0 for safety)
+    MAX_GRIPPER_DELTA = 0.005    # Slower gripper movement to avoid velocity issues
 
     def send_action(self, action: Dict[str, np.ndarray]):
         """
