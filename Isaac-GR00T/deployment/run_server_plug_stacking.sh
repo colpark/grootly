@@ -10,16 +10,16 @@
 #
 # Server Configuration:
 #   - Host: 0.0.0.0 (all interfaces)
-#   - Port: 5559
-#   - Checkpoint: ./outputs/plug_stacking/checkpoint-10000
+#   - Port: 5561
+#   - Checkpoint: ./outputs/plug_stacking/checkpoint-9000
 
 set -e
 
 # Task-specific configuration
 TASK_NAME="plug_stacking"
-CHECKPOINT="${CHECKPOINT:-./outputs/plug_stacking/checkpoint-10000}"
+CHECKPOINT="${CHECKPOINT:-./outputs/plug_stacking/checkpoint-9000}"
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-5559}"
+PORT="${PORT:-5561}"
 DEVICE="${DEVICE:-cuda:0}"
 MODALITY_CONFIG="${MODALITY_CONFIG:-./finetuning/trossen_modality_config.py}"
 
