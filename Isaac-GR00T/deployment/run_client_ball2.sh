@@ -6,12 +6,19 @@
 #
 # Usage:
 #   ./deployment/run_client_ball2.sh
-#   ./deployment/run_client_ball2.sh --dry-run  # Test without robot
+#   ./deployment/run_client_ball2.sh --dry-run    # Test without robot commands
+#   ./deployment/run_client_ball2.sh --mock       # Test without robot hardware
+#   ./deployment/run_client_ball2.sh --test-only  # Test server connection only
 #
-# Configuration:
-#   - Server IP: 130.199.95.27
-#   - Server Port: 5559
-#   - Task: "Transfer the ball from one arm to the other"
+# Environment Variables:
+#   SERVER_IP              - GPU server IP (default: 130.199.95.27)
+#   SERVER_PORT            - GPU server port (default: 5559)
+#   TASK_INSTRUCTION       - Task description
+#   LEFT_ARM_IP            - Left arm IP (default: 192.168.1.5)
+#   RIGHT_ARM_IP           - Right arm IP (default: 192.168.1.4)
+#   CAM_HIGH_SERIAL        - High camera serial number
+#   CAM_LEFT_WRIST_SERIAL  - Left wrist camera serial number
+#   CAM_RIGHT_WRIST_SERIAL - Right wrist camera serial number
 
 set -e
 
@@ -20,6 +27,13 @@ TASK_NAME="ball2"
 TASK_INSTRUCTION="${TASK_INSTRUCTION:-Transfer the ball from one arm to the other}"
 SERVER_IP="${SERVER_IP:-130.199.95.27}"
 SERVER_PORT="${SERVER_PORT:-5559}"
+
+# Robot hardware configuration
+LEFT_ARM_IP="${LEFT_ARM_IP:-192.168.1.5}"
+RIGHT_ARM_IP="${RIGHT_ARM_IP:-192.168.1.4}"
+CAM_HIGH_SERIAL="${CAM_HIGH_SERIAL:-130322274102}"
+CAM_LEFT_WRIST_SERIAL="${CAM_LEFT_WRIST_SERIAL:-130322271087}"
+CAM_RIGHT_WRIST_SERIAL="${CAM_RIGHT_WRIST_SERIAL:-130322270184}"
 
 echo "=============================================="
 echo "GR00T Client: Ball Transfer Task (Ball2)"
@@ -31,16 +45,28 @@ echo "=============================================="
 
 # Parse arguments
 EXTRA_ARGS=""
-if [[ "$1" == "--dry-run" ]]; then
-    EXTRA_ARGS="--dry-run --verbose"
-    echo "Mode: DRY RUN (no robot commands)"
-elif [[ "$1" == "--test" ]]; then
-    echo "Testing connection only..."
-    python deployment/test_connection.py \
-        --server-ip "${SERVER_IP}" \
-        --server-port "${SERVER_PORT}"
-    exit $?
-fi
+for arg in "$@"; do
+    case $arg in
+        --dry-run)
+            EXTRA_ARGS="${EXTRA_ARGS} --dry-run --verbose"
+            echo "Mode: DRY RUN (no robot commands)"
+            ;;
+        --mock)
+            EXTRA_ARGS="${EXTRA_ARGS} --mock"
+            echo "Mode: MOCK (no robot hardware)"
+            ;;
+        --test-only)
+            EXTRA_ARGS="${EXTRA_ARGS} --test-only"
+            echo "Mode: TEST ONLY (server connection)"
+            ;;
+        --verbose|-v)
+            EXTRA_ARGS="${EXTRA_ARGS} --verbose"
+            ;;
+        *)
+            EXTRA_ARGS="${EXTRA_ARGS} ${arg}"
+            ;;
+    esac
+done
 
 echo ""
 echo "Starting robot client..."
@@ -51,5 +77,9 @@ python deployment/trossen_client.py \
     --server-ip "${SERVER_IP}" \
     --server-port "${SERVER_PORT}" \
     --task "${TASK_INSTRUCTION}" \
-    ${EXTRA_ARGS} \
-    "$@"
+    --left-arm-ip "${LEFT_ARM_IP}" \
+    --right-arm-ip "${RIGHT_ARM_IP}" \
+    --cam-high-serial "${CAM_HIGH_SERIAL}" \
+    --cam-left-wrist-serial "${CAM_LEFT_WRIST_SERIAL}" \
+    --cam-right-wrist-serial "${CAM_RIGHT_WRIST_SERIAL}" \
+    ${EXTRA_ARGS}

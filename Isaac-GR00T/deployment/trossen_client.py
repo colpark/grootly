@@ -34,15 +34,21 @@ Configuration:
     Server Port: 5559
     Action Horizon: 16 steps (configurable)
     Control Frequency: ~30 Hz
+
+Requirements (on robot computer):
+    - lerobot from Interbotix/lerobot (trossen-ai branch)
+    - pyrealsense2 for Intel RealSense cameras
+    - zmq for server communication
 """
 
 import argparse
 import logging
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import cv2
 import numpy as np
 
 # Add project root to path for imports
@@ -59,6 +65,21 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# LeRobot Integration - Import with fallback for development
+# =============================================================================
+LEROBOT_AVAILABLE = False
+try:
+    from lerobot.common.robot_devices.robots.factory import make_robot
+    from lerobot.common.robot_devices.robots.configs import TrossenAIMobileRobotConfig
+    from lerobot.common.robot_devices.cameras.configs import IntelRealSenseCameraConfig
+    LEROBOT_AVAILABLE = True
+    logger.info("LeRobot integration available")
+except ImportError as e:
+    logger.warning(f"LeRobot not available: {e}")
+    logger.warning("Running in mock mode - install lerobot for real robot control")
 
 
 @dataclass
@@ -81,48 +102,165 @@ class ClientConfig:
     max_base_linear_vel: float = 0.5  # m/s
     max_base_angular_vel: float = 1.0  # rad/s
 
+    # Robot hardware configuration
+    left_arm_ip: str = "192.168.1.5"
+    right_arm_ip: str = "192.168.1.4"
+
+    # Camera serial numbers (Intel RealSense)
+    # Update these with your actual camera serial numbers
+    cam_high_serial: str = "130322274102"
+    cam_left_wrist_serial: str = "130322271087"
+    cam_right_wrist_serial: str = "130322270184"
+
+    # Camera resolution
+    camera_width: int = 640
+    camera_height: int = 480
+    camera_fps: int = 30
+
     # Debug
     verbose: bool = False
     dry_run: bool = False  # If True, don't send commands to robot
+    mock_robot: bool = False  # If True, use mock robot (no hardware)
 
 
 class TrossenRobotInterface:
     """
-    Interface to the physical Trossen AI Mobile robot.
+    Interface to the physical Trossen AI Mobile robot using LeRobot.
 
-    This is a placeholder implementation. Replace with actual
-    Trossen robot SDK calls for your specific setup.
+    This implementation uses the LeRobot library from Interbotix/lerobot
+    (trossen-ai branch) to communicate with the Trossen AI Mobile robot.
+
+    State Vector (19 DOF):
+        [0:3]   base_odom: odom_x, odom_y, odom_theta
+        [3:5]   base_vel: linear_vel, angular_vel
+        [5:12]  left_arm: 7 joint positions
+        [12:19] right_arm: 7 joint positions
+
+    Action Vector (16 DOF):
+        [0:2]   base_vel: linear_vel, angular_vel
+        [2:9]   left_arm: 7 joint commands
+        [9:16]  right_arm: 7 joint commands
     """
+
+    # Joint feature name patterns for Trossen AI Mobile
+    # These map to the keys returned by robot.get_observation()
+    LEFT_ARM_JOINTS = [
+        "left_waist.pos",
+        "left_shoulder.pos",
+        "left_elbow.pos",
+        "left_forearm_roll.pos",
+        "left_wrist_pitch.pos",
+        "left_wrist_roll.pos",
+        "left_gripper.pos",
+    ]
+
+    RIGHT_ARM_JOINTS = [
+        "right_waist.pos",
+        "right_shoulder.pos",
+        "right_elbow.pos",
+        "right_forearm_roll.pos",
+        "right_wrist_pitch.pos",
+        "right_wrist_roll.pos",
+        "right_gripper.pos",
+    ]
+
+    # Action joint names (without .pos suffix)
+    LEFT_ARM_ACTION_KEYS = [
+        "left_waist",
+        "left_shoulder",
+        "left_elbow",
+        "left_forearm_roll",
+        "left_wrist_pitch",
+        "left_wrist_roll",
+        "left_gripper",
+    ]
+
+    RIGHT_ARM_ACTION_KEYS = [
+        "right_waist",
+        "right_shoulder",
+        "right_elbow",
+        "right_forearm_roll",
+        "right_wrist_pitch",
+        "right_wrist_roll",
+        "right_gripper",
+    ]
+
+    CAMERA_NAMES = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
 
     def __init__(self, config: ClientConfig):
         self.config = config
         self.connected = False
+        self.robot = None
+
+        # For mock mode or when LeRobot is not available
+        self._use_mock = config.mock_robot or not LEROBOT_AVAILABLE
+
+    def _create_robot_config(self):
+        """Create LeRobot configuration for Trossen AI Mobile."""
+        if not LEROBOT_AVAILABLE:
+            raise RuntimeError("LeRobot is not available. Install it first.")
+
+        robot_config = TrossenAIMobileRobotConfig(
+            robot_type="trossen_ai_mobile",
+            left_arm_ip_address=self.config.left_arm_ip,
+            right_arm_ip_address=self.config.right_arm_ip,
+            cameras={
+                "cam_high": IntelRealSenseCameraConfig(
+                    serial_number_or_name=self.config.cam_high_serial,
+                    width=self.config.camera_width,
+                    height=self.config.camera_height,
+                    fps=self.config.camera_fps,
+                ),
+                "cam_left_wrist": IntelRealSenseCameraConfig(
+                    serial_number_or_name=self.config.cam_left_wrist_serial,
+                    width=self.config.camera_width,
+                    height=self.config.camera_height,
+                    fps=self.config.camera_fps,
+                ),
+                "cam_right_wrist": IntelRealSenseCameraConfig(
+                    serial_number_or_name=self.config.cam_right_wrist_serial,
+                    width=self.config.camera_width,
+                    height=self.config.camera_height,
+                    fps=self.config.camera_fps,
+                ),
+            },
+        )
+        return robot_config
 
     def connect(self) -> bool:
-        """
-        Connect to the robot hardware.
-
-        Replace this with your actual robot connection code.
-        For example, using ROS, LeRobot, or Trossen's SDK.
-        """
+        """Connect to the robot hardware."""
         logger.info("Connecting to Trossen AI Mobile robot...")
 
-        # TODO: Replace with actual robot connection
-        # Example for LeRobot:
-        # from lerobot.robots import make_robot_from_config
-        # self.robot = make_robot_from_config(your_config)
-        # self.robot.connect()
+        if self._use_mock:
+            logger.warning("Running in MOCK mode - no real robot connection")
+            self.connected = True
+            return True
 
-        self.connected = True
-        logger.info("Robot connected successfully")
-        return True
+        try:
+            robot_config = self._create_robot_config()
+            self.robot = make_robot(robot_config)
+            self.robot.connect()
+            self.connected = True
+            logger.info("Robot connected successfully")
+            logger.info(f"  Left arm IP: {self.config.left_arm_ip}")
+            logger.info(f"  Right arm IP: {self.config.right_arm_ip}")
+            logger.info(f"  Cameras: {self.CAMERA_NAMES}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to robot: {e}")
+            return False
 
     def disconnect(self):
         """Disconnect from the robot."""
         if self.connected:
             logger.info("Disconnecting from robot...")
-            # TODO: Add actual disconnect code
+            if self.robot is not None:
+                try:
+                    self.robot.disconnect()
+                except Exception as e:
+                    logger.warning(f"Error during disconnect: {e}")
             self.connected = False
+            self.robot = None
 
     def get_observation(self) -> Dict:
         """
@@ -130,27 +268,63 @@ class TrossenRobotInterface:
 
         Returns:
             Dict containing:
-                - cameras: Dict[str, np.ndarray] - camera images
+                - cameras: Dict[str, np.ndarray] - camera images (H, W, 3) RGB
                 - state: np.ndarray - 19-DOF state vector
         """
-        # TODO: Replace with actual sensor reading code
-        # Example structure:
-        # obs = self.robot.get_observation()
-        # cameras = {
-        #     "cam_high": obs["cam_high"],
-        #     "cam_left_wrist": obs["cam_left_wrist"],
-        #     "cam_right_wrist": obs["cam_right_wrist"],
-        # }
-        # state = obs["state"]  # 19-DOF vector
+        if self._use_mock:
+            return self._get_mock_observation()
 
-        # Placeholder - replace with actual implementation
-        cameras = {
-            "cam_high": np.zeros((256, 256, 3), dtype=np.uint8),
-            "cam_left_wrist": np.zeros((256, 256, 3), dtype=np.uint8),
-            "cam_right_wrist": np.zeros((256, 256, 3), dtype=np.uint8),
-        }
+        # Get raw observation from LeRobot
+        obs = self.robot.get_observation()
+
+        # Extract camera images
+        cameras = {}
+        for cam_name in self.CAMERA_NAMES:
+            if cam_name in obs:
+                image = obs[cam_name]
+                # Convert BGR to RGB if needed (LeRobot returns BGR)
+                if image.shape[-1] == 3:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                cameras[cam_name] = image
+            else:
+                logger.warning(f"Camera {cam_name} not found in observation")
+                cameras[cam_name] = np.zeros((self.config.camera_height, self.config.camera_width, 3), dtype=np.uint8)
+
+        # Build 19-DOF state vector
         state = np.zeros(19, dtype=np.float32)
 
+        # Base odometry (indices 0-2): odom_x, odom_y, odom_theta
+        # Note: These may not be available on all configurations
+        state[0] = obs.get("base_odom_x", 0.0)
+        state[1] = obs.get("base_odom_y", 0.0)
+        state[2] = obs.get("base_odom_theta", 0.0)
+
+        # Base velocity (indices 3-4): linear_vel, angular_vel
+        state[3] = obs.get("base_linear_vel", 0.0)
+        state[4] = obs.get("base_angular_vel", 0.0)
+
+        # Left arm joints (indices 5-11)
+        for i, joint_key in enumerate(self.LEFT_ARM_JOINTS):
+            state[5 + i] = obs.get(joint_key, 0.0)
+
+        # Right arm joints (indices 12-18)
+        for i, joint_key in enumerate(self.RIGHT_ARM_JOINTS):
+            state[12 + i] = obs.get(joint_key, 0.0)
+
+        if self.config.verbose:
+            logger.debug(f"State: base_odom={state[0:3]}, base_vel={state[3:5]}")
+            logger.debug(f"       left_arm={state[5:12]}, right_arm={state[12:19]}")
+
+        return {"cameras": cameras, "state": state}
+
+    def _get_mock_observation(self) -> Dict:
+        """Return mock observation for testing without hardware."""
+        cameras = {
+            "cam_high": np.zeros((self.config.camera_height, self.config.camera_width, 3), dtype=np.uint8),
+            "cam_left_wrist": np.zeros((self.config.camera_height, self.config.camera_width, 3), dtype=np.uint8),
+            "cam_right_wrist": np.zeros((self.config.camera_height, self.config.camera_width, 3), dtype=np.uint8),
+        }
+        state = np.zeros(19, dtype=np.float32)
         return {"cameras": cameras, "state": state}
 
     def send_action(self, action: Dict[str, np.ndarray]):
@@ -163,26 +337,39 @@ class TrossenRobotInterface:
                 - left_arm: np.ndarray (7,) - joint commands
                 - right_arm: np.ndarray (7,) - joint commands
         """
-        # Apply safety limits
+        # Apply safety limits to base velocity
         base_vel = action["base_vel"].copy()
         base_vel[0] = np.clip(base_vel[0], -self.config.max_base_linear_vel, self.config.max_base_linear_vel)
         base_vel[1] = np.clip(base_vel[1], -self.config.max_base_angular_vel, self.config.max_base_angular_vel)
 
         if self.config.verbose:
             logger.debug(f"Sending action - base_vel: {base_vel}")
+            logger.debug(f"  left_arm: {action['left_arm']}")
+            logger.debug(f"  right_arm: {action['right_arm']}")
 
-        if self.config.dry_run:
+        if self.config.dry_run or self._use_mock:
             return
 
-        # TODO: Replace with actual robot command code
-        # Example:
-        # self.robot.send_action({
-        #     "base_linear_vel": float(base_vel[0]),
-        #     "base_angular_vel": float(base_vel[1]),
-        #     "left_arm_joints": action["left_arm"].tolist(),
-        #     "right_arm_joints": action["right_arm"].tolist(),
-        # })
-        pass
+        # Build action dict for LeRobot
+        action_dict = {}
+
+        # Base velocity commands
+        action_dict["base_linear_vel"] = float(base_vel[0])
+        action_dict["base_angular_vel"] = float(base_vel[1])
+
+        # Left arm joint commands
+        for i, joint_key in enumerate(self.LEFT_ARM_ACTION_KEYS):
+            action_dict[joint_key] = float(action["left_arm"][i])
+
+        # Right arm joint commands
+        for i, joint_key in enumerate(self.RIGHT_ARM_ACTION_KEYS):
+            action_dict[joint_key] = float(action["right_arm"][i])
+
+        # Send to robot
+        try:
+            self.robot.send_action(action_dict)
+        except Exception as e:
+            logger.error(f"Failed to send action: {e}")
 
 
 def run_control_loop(
@@ -356,9 +543,46 @@ Examples:
         help="Run without sending commands to robot",
     )
     parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock robot (no hardware required)",
+    )
+    parser.add_argument(
         "--test-only",
         action="store_true",
         help="Only test server connection, then exit",
+    )
+
+    # Robot hardware configuration
+    parser.add_argument(
+        "--left-arm-ip",
+        type=str,
+        default="192.168.1.5",
+        help="IP address of the left arm (default: 192.168.1.5)",
+    )
+    parser.add_argument(
+        "--right-arm-ip",
+        type=str,
+        default="192.168.1.4",
+        help="IP address of the right arm (default: 192.168.1.4)",
+    )
+    parser.add_argument(
+        "--cam-high-serial",
+        type=str,
+        default="130322274102",
+        help="Serial number of the high camera",
+    )
+    parser.add_argument(
+        "--cam-left-wrist-serial",
+        type=str,
+        default="130322271087",
+        help="Serial number of the left wrist camera",
+    )
+    parser.add_argument(
+        "--cam-right-wrist-serial",
+        type=str,
+        default="130322270184",
+        help="Serial number of the right wrist camera",
     )
 
     args = parser.parse_args()
@@ -373,6 +597,12 @@ Examples:
         control_frequency=args.control_freq,
         verbose=args.verbose,
         dry_run=args.dry_run,
+        mock_robot=args.mock,
+        left_arm_ip=args.left_arm_ip,
+        right_arm_ip=args.right_arm_ip,
+        cam_high_serial=args.cam_high_serial,
+        cam_left_wrist_serial=args.cam_left_wrist_serial,
+        cam_right_wrist_serial=args.cam_right_wrist_serial,
     )
 
     if config.verbose:
@@ -385,6 +615,13 @@ Examples:
     logger.info(f"Server: tcp://{config.server_ip}:{config.server_port}")
     logger.info(f"Task: {config.task_instruction}")
     logger.info(f"Dry run: {config.dry_run}")
+    logger.info(f"Mock mode: {config.mock_robot}")
+    if not config.mock_robot:
+        logger.info(f"Left arm IP: {config.left_arm_ip}")
+        logger.info(f"Right arm IP: {config.right_arm_ip}")
+        logger.info(f"Cameras: cam_high={config.cam_high_serial}, "
+                    f"cam_left_wrist={config.cam_left_wrist_serial}, "
+                    f"cam_right_wrist={config.cam_right_wrist_serial}")
     logger.info("=" * 50)
 
     # Create policy client
@@ -410,10 +647,13 @@ Examples:
     robot = TrossenRobotInterface(config)
 
     # Connect to robot
-    if not config.dry_run:
+    if not config.dry_run and not config.mock_robot:
         if not robot.connect():
             logger.error("Failed to connect to robot")
             sys.exit(1)
+    elif config.mock_robot:
+        logger.info("Running in MOCK mode - no robot hardware required")
+        robot.connect()  # Sets connected=True for mock
 
     try:
         # Run the control loop
