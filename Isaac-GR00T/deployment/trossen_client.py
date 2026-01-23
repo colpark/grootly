@@ -2,7 +2,7 @@
 """
 Trossen AI Mobile Robot Client for GR00T Policy Server
 
-VERSION: 2.2 - Treat model output as ABSOLUTE positions (not relative deltas)
+VERSION: 2.3 - Very conservative joint limits to debug LeRobot scaling
 
 This script runs on the robot's computer and connects to a remote
 GR00T inference server to get action predictions in real-time.
@@ -365,8 +365,11 @@ class TrossenRobotInterface:
         "default": [-3.14, 3.14],  # ~180 degrees each way
         "gripper": [0.0, 1.0],     # gripper range
     }
-    # Motor limit is [-12.5, 12.5] - use 10.0 for extra safety margin
-    MAX_JOINT_POSITION = 10.0  # Conservative limit well below motor max of 12.5
+    # Motor limit is [-12.5, 12.5] but there seems to be internal scaling in LeRobot
+    # The gripper especially seems to have ~10x scaling (1.4 rad -> 14.68 motor units)
+    # Use very conservative limit until we understand the scaling
+    MAX_JOINT_POSITION = 1.0  # VERY conservative - test with small movements first
+    MAX_GRIPPER_POSITION = 0.1  # Gripper seems to have different scaling
 
     def send_action(self, action: Dict[str, np.ndarray]):
         """
@@ -398,8 +401,17 @@ class TrossenRobotInterface:
         right_arm = action["right_arm"].copy()
 
         # Apply safety limits to ABSOLUTE joint positions
-        left_arm_clamped = np.clip(left_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
-        right_arm_clamped = np.clip(right_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+        # Clamp arm joints (indices 0-5) and gripper (index 6) separately
+        left_arm_clamped = left_arm.copy()
+        right_arm_clamped = right_arm.copy()
+
+        # Clamp arm joints (0-5)
+        left_arm_clamped[:6] = np.clip(left_arm[:6], -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+        right_arm_clamped[:6] = np.clip(right_arm[:6], -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+
+        # Clamp gripper (index 6) with different limits - gripper seems to have ~10x scaling
+        left_arm_clamped[6] = np.clip(left_arm[6], 0, self.MAX_GRIPPER_POSITION)
+        right_arm_clamped[6] = np.clip(right_arm[6], 0, self.MAX_GRIPPER_POSITION)
 
         # Log if any values were clamped
         if np.any(left_arm != left_arm_clamped) or np.any(right_arm != right_arm_clamped):
@@ -444,16 +456,17 @@ class TrossenRobotInterface:
 
         # FINAL SAFETY CHECK - clamp again right before sending
         # This catches any bugs in the logic above
-        HARD_LIMIT = 10.0
-        left_arm = np.clip(left_arm, -HARD_LIMIT, HARD_LIMIT)
-        right_arm = np.clip(right_arm, -HARD_LIMIT, HARD_LIMIT)
+        HARD_LIMIT_JOINTS = 1.0  # Very conservative for arm joints
+        HARD_LIMIT_GRIPPER = 0.1  # Even more conservative for gripper (has ~10x scaling)
 
-        # Verify values are in bounds before sending
-        if np.any(np.abs(left_arm) > HARD_LIMIT) or np.any(np.abs(right_arm) > HARD_LIMIT):
-            logger.error(f"SAFETY VIOLATION: Values still out of bounds after clamping!")
-            logger.error(f"  left_arm: {left_arm}")
-            logger.error(f"  right_arm: {right_arm}")
-            return  # Don't send dangerous commands
+        # Clamp joints and gripper separately
+        left_arm[:6] = np.clip(left_arm[:6], -HARD_LIMIT_JOINTS, HARD_LIMIT_JOINTS)
+        right_arm[:6] = np.clip(right_arm[:6], -HARD_LIMIT_JOINTS, HARD_LIMIT_JOINTS)
+        left_arm[6] = np.clip(left_arm[6], 0, HARD_LIMIT_GRIPPER)
+        right_arm[6] = np.clip(right_arm[6], 0, HARD_LIMIT_GRIPPER)
+
+        # Log what we're sending after all clamping
+        logger.info(f"After clamping: left={left_arm}, right={right_arm}")
 
         lerobot_action = torch.tensor(
             np.concatenate([
@@ -734,7 +747,7 @@ Examples:
     # Print configuration
     logger.info("=" * 50)
     logger.info("Trossen AI Mobile - GR00T Policy Client")
-    logger.info("VERSION: 2.2 - Model outputs treated as ABSOLUTE positions")
+    logger.info("VERSION: 2.3 - Very conservative limits (joints ±1.0, gripper 0-0.1)")
     logger.info("=" * 50)
     logger.info(f"Server: tcp://{config.server_ip}:{config.server_port}")
     logger.info(f"Task: {config.task_instruction}")
