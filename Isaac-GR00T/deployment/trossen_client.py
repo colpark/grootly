@@ -116,6 +116,11 @@ class ClientConfig:
     camera_height: int = 480
     camera_fps: int = 30
 
+    # Hardware options
+    disable_leader_arms: bool = True   # Disable leader arms (not needed for policy)
+    disable_base: bool = False         # Disable mobile base
+    arms_only: bool = False            # Only connect follower arms (no base, no leader)
+
     # Debug
     verbose: bool = False
     dry_run: bool = False  # If True, don't send commands to robot
@@ -215,6 +220,11 @@ class TrossenRobotInterface:
             robot_config.cameras["cam_left_wrist"].serial_number = int(self.config.cam_left_wrist_serial)
         if self.config.cam_right_wrist_serial != "130322270184":
             robot_config.cameras["cam_right_wrist"].serial_number = int(self.config.cam_right_wrist_serial)
+
+        # Disable leader arms if requested (not needed for policy deployment)
+        if self.config.disable_leader_arms or self.config.arms_only:
+            robot_config.leader_arms = {}
+            logger.info("Leader arms disabled")
 
         return robot_config
 
@@ -362,6 +372,11 @@ class TrossenRobotInterface:
         # GR00T: [base_vel(2), left_arm(7), right_arm(7)]
         # LeRobot: [left_arm(7), right_arm(7), linear_vel, angular_vel]
         import torch
+
+        # If base is disabled or arms_only mode, zero out base velocity
+        if self.config.disable_base or self.config.arms_only:
+            base_vel = np.zeros(2, dtype=np.float32)
+
         lerobot_action = torch.tensor(
             np.concatenate([
                 action["left_arm"],    # 7 joints
@@ -591,6 +606,23 @@ Examples:
         help="Serial number of the right wrist camera",
     )
 
+    # Hardware options
+    parser.add_argument(
+        "--arms-only",
+        action="store_true",
+        help="Only connect follower arms (no leader arms, no base)",
+    )
+    parser.add_argument(
+        "--enable-leader-arms",
+        action="store_true",
+        help="Enable leader arms (disabled by default for policy deployment)",
+    )
+    parser.add_argument(
+        "--disable-base",
+        action="store_true",
+        help="Disable mobile base",
+    )
+
     args = parser.parse_args()
 
     # Create configuration
@@ -609,6 +641,9 @@ Examples:
         cam_high_serial=args.cam_high_serial,
         cam_left_wrist_serial=args.cam_left_wrist_serial,
         cam_right_wrist_serial=args.cam_right_wrist_serial,
+        arms_only=args.arms_only,
+        disable_leader_arms=not args.enable_leader_arms,  # Disabled by default
+        disable_base=args.disable_base,
     )
 
     if config.verbose:
