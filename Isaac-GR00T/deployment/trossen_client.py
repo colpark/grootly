@@ -2,7 +2,7 @@
 """
 Trossen AI Mobile Robot Client for GR00T Policy Server
 
-VERSION: 2.1 - Added relative-to-absolute action conversion and safety clamping
+VERSION: 2.2 - Treat model output as ABSOLUTE positions (not relative deltas)
 
 This script runs on the robot's computer and connects to a remote
 GR00T inference server to get action predictions in real-time.
@@ -375,11 +375,12 @@ class TrossenRobotInterface:
         Args:
             action: Dict with:
                 - base_vel: np.ndarray (2,) - [linear_vel, angular_vel] (ABSOLUTE)
-                - left_arm: np.ndarray (7,) - joint DELTA commands (RELATIVE)
-                - right_arm: np.ndarray (7,) - joint DELTA commands (RELATIVE)
+                - left_arm: np.ndarray (7,) - joint position commands (ABSOLUTE)
+                - right_arm: np.ndarray (7,) - joint position commands (ABSOLUTE)
 
-        IMPORTANT: GR00T model outputs RELATIVE (delta) actions for arms!
-        We must convert: absolute_position = current_position + delta
+        NOTE: Despite modality config indicating RELATIVE actions, empirical testing
+        shows the model outputs ABSOLUTE positions. We apply safety clamping and
+        send directly to the robot.
 
         GR00T action format: [base_vel(2), left_arm(7), right_arm(7)]
         LeRobot action format: [left_arm(7), right_arm(7), linear_vel, angular_vel]
@@ -389,20 +390,12 @@ class TrossenRobotInterface:
         base_vel[0] = np.clip(base_vel[0], -self.config.max_base_linear_vel, self.config.max_base_linear_vel)
         base_vel[1] = np.clip(base_vel[1], -self.config.max_base_angular_vel, self.config.max_base_angular_vel)
 
-        # Get arm action deltas (RELATIVE values from model)
-        left_arm_delta = action["left_arm"].copy()
-        right_arm_delta = action["right_arm"].copy()
-
-        # Convert RELATIVE (delta) actions to ABSOLUTE positions
-        # absolute_position = current_position + delta
-        if self._arm_positions_initialized:
-            left_arm = self._current_left_arm + left_arm_delta
-            right_arm = self._current_right_arm + right_arm_delta
-        else:
-            # If positions not yet initialized, treat as absolute (first frame)
-            logger.warning("Arm positions not initialized - using delta as absolute for first frame")
-            left_arm = left_arm_delta
-            right_arm = right_arm_delta
+        # Get arm action values from model
+        # NOTE: Despite modality config saying RELATIVE, the model appears to output
+        # ABSOLUTE positions (values similar to current positions, not small deltas).
+        # We treat them as ABSOLUTE to avoid position accumulation/explosion.
+        left_arm = action["left_arm"].copy()
+        right_arm = action["right_arm"].copy()
 
         # Apply safety limits to ABSOLUTE joint positions
         left_arm_clamped = np.clip(left_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
@@ -429,12 +422,12 @@ class TrossenRobotInterface:
 
         if self._action_count <= 5 or self.config.verbose:
             logger.info(f"Action #{self._action_count}:")
-            logger.info(f"  current_left:  {self._current_left_arm}")
-            logger.info(f"  current_right: {self._current_right_arm}")
-            logger.info(f"  delta_left:    {left_arm_delta}")
-            logger.info(f"  delta_right:   {right_arm_delta}")
-            logger.info(f"  absolute_left: {left_arm}")
-            logger.info(f"  absolute_right:{right_arm}")
+            logger.info(f"  robot_left:    {self._current_left_arm}")
+            logger.info(f"  robot_right:   {self._current_right_arm}")
+            logger.info(f"  model_left:    {action['left_arm']}")
+            logger.info(f"  model_right:   {action['right_arm']}")
+            logger.info(f"  target_left:   {left_arm}")
+            logger.info(f"  target_right:  {right_arm}")
             logger.info(f"  base_vel:      {base_vel}")
 
         if self.config.dry_run or self._use_mock:
@@ -741,7 +734,7 @@ Examples:
     # Print configuration
     logger.info("=" * 50)
     logger.info("Trossen AI Mobile - GR00T Policy Client")
-    logger.info("VERSION: 2.1 - Relative action conversion + safety clamping")
+    logger.info("VERSION: 2.2 - Model outputs treated as ABSOLUTE positions")
     logger.info("=" * 50)
     logger.info(f"Server: tcp://{config.server_ip}:{config.server_port}")
     logger.info(f"Task: {config.task_instruction}")
