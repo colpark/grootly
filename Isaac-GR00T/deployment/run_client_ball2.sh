@@ -24,7 +24,7 @@ set -e
 
 # Task-specific configuration
 TASK_NAME="ball2"
-TASK_INSTRUCTION="${TASK_INSTRUCTION:-Transfer the ball}"
+TASK_INSTRUCTION="${TASK_INSTRUCTION:-Transfer the ball from one arm to the other}"
 SERVER_IP="${SERVER_IP:-130.199.95.27}"
 SERVER_PORT="${SERVER_PORT:-5560}"
 
