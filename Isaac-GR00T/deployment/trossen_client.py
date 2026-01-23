@@ -2,7 +2,7 @@
 """
 Trossen AI Mobile Robot Client for GR00T Policy Server
 
-VERSION: 2.3 - Very conservative joint limits to debug LeRobot scaling
+VERSION: 2.4 - Velocity-limited movements (max delta per step)
 
 This script runs on the robot's computer and connects to a remote
 GR00T inference server to get action predictions in real-time.
@@ -365,11 +365,10 @@ class TrossenRobotInterface:
         "default": [-3.14, 3.14],  # ~180 degrees each way
         "gripper": [0.0, 1.0],     # gripper range
     }
-    # Motor limit is [-12.5, 12.5] but there seems to be internal scaling in LeRobot
-    # The gripper especially seems to have ~10x scaling (1.4 rad -> 14.68 motor units)
-    # Use very conservative limit until we understand the scaling
-    MAX_JOINT_POSITION = 1.0  # VERY conservative - test with small movements first
-    MAX_GRIPPER_POSITION = 0.1  # Gripper seems to have different scaling
+    # Instead of absolute position limits, limit the CHANGE per step
+    # This prevents sudden jumps that exceed motor velocity limits
+    MAX_DELTA_PER_STEP = 0.05  # Maximum change in radians per control step
+    MAX_GRIPPER_DELTA = 0.02  # Gripper moves slower to avoid velocity errors
 
     def send_action(self, action: Dict[str, np.ndarray]):
         """
@@ -400,18 +399,28 @@ class TrossenRobotInterface:
         left_arm = action["left_arm"].copy()
         right_arm = action["right_arm"].copy()
 
-        # Apply safety limits to ABSOLUTE joint positions
-        # Clamp arm joints (indices 0-5) and gripper (index 6) separately
-        left_arm_clamped = left_arm.copy()
-        right_arm_clamped = right_arm.copy()
+        # Store current positions for logging (before we update them)
+        prev_left = self._current_left_arm.copy()
+        prev_right = self._current_right_arm.copy()
 
-        # Clamp arm joints (0-5)
-        left_arm_clamped[:6] = np.clip(left_arm[:6], -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
-        right_arm_clamped[:6] = np.clip(right_arm[:6], -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+        # VELOCITY LIMITING: Instead of absolute position limits, limit the CHANGE per step
+        # This prevents sudden jumps that exceed motor velocity limits
+        # Compute delta from current position to target
+        left_delta = left_arm - prev_left
+        right_delta = right_arm - prev_right
 
-        # Clamp gripper (index 6) with different limits - gripper seems to have ~10x scaling
-        left_arm_clamped[6] = np.clip(left_arm[6], 0, self.MAX_GRIPPER_POSITION)
-        right_arm_clamped[6] = np.clip(right_arm[6], 0, self.MAX_GRIPPER_POSITION)
+        # Clamp deltas to max allowed change per step
+        # Arm joints (indices 0-5)
+        left_delta[:6] = np.clip(left_delta[:6], -self.MAX_DELTA_PER_STEP, self.MAX_DELTA_PER_STEP)
+        right_delta[:6] = np.clip(right_delta[:6], -self.MAX_DELTA_PER_STEP, self.MAX_DELTA_PER_STEP)
+
+        # Gripper (index 6) - slower movement
+        left_delta[6] = np.clip(left_delta[6], -self.MAX_GRIPPER_DELTA, self.MAX_GRIPPER_DELTA)
+        right_delta[6] = np.clip(right_delta[6], -self.MAX_GRIPPER_DELTA, self.MAX_GRIPPER_DELTA)
+
+        # Apply clamped deltas to current position
+        left_arm_clamped = prev_left + left_delta
+        right_arm_clamped = prev_right + right_delta
 
         # Log if any values were clamped
         if np.any(left_arm != left_arm_clamped) or np.any(right_arm != right_arm_clamped):
@@ -434,10 +443,12 @@ class TrossenRobotInterface:
 
         if self._action_count <= 5 or self.config.verbose:
             logger.info(f"Action #{self._action_count}:")
-            logger.info(f"  robot_left:    {self._current_left_arm}")
-            logger.info(f"  robot_right:   {self._current_right_arm}")
+            logger.info(f"  prev_left:     {prev_left}")
+            logger.info(f"  prev_right:    {prev_right}")
             logger.info(f"  model_left:    {action['left_arm']}")
             logger.info(f"  model_right:   {action['right_arm']}")
+            logger.info(f"  delta_left:    {left_delta}")
+            logger.info(f"  delta_right:   {right_delta}")
             logger.info(f"  target_left:   {left_arm}")
             logger.info(f"  target_right:  {right_arm}")
             logger.info(f"  base_vel:      {base_vel}")
@@ -454,19 +465,10 @@ class TrossenRobotInterface:
         if self.config.disable_base or self.config.arms_only:
             base_vel = np.zeros(2, dtype=np.float32)
 
-        # FINAL SAFETY CHECK - clamp again right before sending
-        # This catches any bugs in the logic above
-        HARD_LIMIT_JOINTS = 1.0  # Very conservative for arm joints
-        HARD_LIMIT_GRIPPER = 0.1  # Even more conservative for gripper (has ~10x scaling)
-
-        # Clamp joints and gripper separately
-        left_arm[:6] = np.clip(left_arm[:6], -HARD_LIMIT_JOINTS, HARD_LIMIT_JOINTS)
-        right_arm[:6] = np.clip(right_arm[:6], -HARD_LIMIT_JOINTS, HARD_LIMIT_JOINTS)
-        left_arm[6] = np.clip(left_arm[6], 0, HARD_LIMIT_GRIPPER)
-        right_arm[6] = np.clip(right_arm[6], 0, HARD_LIMIT_GRIPPER)
-
-        # Log what we're sending after all clamping
-        logger.info(f"After clamping: left={left_arm}, right={right_arm}")
+        # FINAL SAFETY CHECK - ensure absolute positions are within motor limits
+        HARD_LIMIT = 12.0  # Motor limit is 12.5, use 12.0 for safety
+        left_arm = np.clip(left_arm, -HARD_LIMIT, HARD_LIMIT)
+        right_arm = np.clip(right_arm, -HARD_LIMIT, HARD_LIMIT)
 
         lerobot_action = torch.tensor(
             np.concatenate([
@@ -747,7 +749,7 @@ Examples:
     # Print configuration
     logger.info("=" * 50)
     logger.info("Trossen AI Mobile - GR00T Policy Client")
-    logger.info("VERSION: 2.3 - Very conservative limits (joints ±1.0, gripper 0-0.1)")
+    logger.info("VERSION: 2.4 - Velocity-limited (max 0.05 rad/step, gripper 0.02)")
     logger.info("=" * 50)
     logger.info(f"Server: tcp://{config.server_ip}:{config.server_port}")
     logger.info(f"Task: {config.task_instruction}")
