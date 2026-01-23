@@ -370,6 +370,13 @@ class TrossenRobotInterface:
     MAX_DELTA_PER_STEP = 0.05  # Maximum change in radians per control step
     MAX_GRIPPER_DELTA = 0.02  # Gripper moves slower to avoid velocity errors
 
+    # CRITICAL: Gripper has ~78x internal scaling in the motor driver!
+    # Motor limit is 12.5 rad, so max gripper position = 12.5/78 ≈ 0.16 rad
+    # Use 0.14 for safety margin
+    GRIPPER_SCALING_FACTOR = 78.0  # Internal motor scaling for gripper
+    MAX_GRIPPER_POSITION = 0.14  # Max absolute gripper position (0.14 * 78 = 10.9 rad at motor)
+    MIN_GRIPPER_POSITION = -0.14  # Min absolute gripper position
+
     def send_action(self, action: Dict[str, np.ndarray]):
         """
         Send action command to robot actuators.
@@ -421,6 +428,12 @@ class TrossenRobotInterface:
         # Apply clamped deltas to current position
         left_arm_clamped = prev_left + left_delta
         right_arm_clamped = prev_right + right_delta
+
+        # CRITICAL: Apply absolute gripper position limits
+        # The gripper motor has ~78x internal scaling (12.5 rad motor limit / 78 = 0.16 rad max)
+        # Clamp gripper to safe absolute range AFTER delta application
+        left_arm_clamped[6] = np.clip(left_arm_clamped[6], self.MIN_GRIPPER_POSITION, self.MAX_GRIPPER_POSITION)
+        right_arm_clamped[6] = np.clip(right_arm_clamped[6], self.MIN_GRIPPER_POSITION, self.MAX_GRIPPER_POSITION)
 
         # Log if any values were clamped
         if np.any(left_arm != left_arm_clamped) or np.any(right_arm != right_arm_clamped):
