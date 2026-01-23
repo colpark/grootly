@@ -199,6 +199,13 @@ class TrossenRobotInterface:
         # For mock mode or when LeRobot is not available
         self._use_mock = config.mock_robot or not LEROBOT_AVAILABLE
 
+        # Track current arm positions for RELATIVE action conversion
+        # GR00T model outputs RELATIVE (delta) actions for arms
+        # We need to convert: absolute_position = current_position + delta
+        self._current_left_arm = np.zeros(7, dtype=np.float32)
+        self._current_right_arm = np.zeros(7, dtype=np.float32)
+        self._arm_positions_initialized = False
+
     def _create_robot_config(self):
         """Create LeRobot configuration for Trossen AI Mobile."""
         if not LEROBOT_AVAILABLE:
@@ -326,6 +333,12 @@ class TrossenRobotInterface:
             state[5:12] = left_arm         # left arm joints
             state[12:19] = right_arm       # right arm joints
 
+            # Store current arm positions for relative action conversion
+            # This is critical: GR00T outputs RELATIVE (delta) actions for arms
+            self._current_left_arm = left_arm.astype(np.float32).copy()
+            self._current_right_arm = right_arm.astype(np.float32).copy()
+            self._arm_positions_initialized = True
+
         if self.config.verbose:
             logger.debug(f"State: base_odom={state[0:3]}, base_vel={state[3:5]}")
             logger.debug(f"       left_arm={state[5:12]}, right_arm={state[12:19]}")
@@ -358,37 +371,58 @@ class TrossenRobotInterface:
 
         Args:
             action: Dict with:
-                - base_vel: np.ndarray (2,) - [linear_vel, angular_vel]
-                - left_arm: np.ndarray (7,) - joint commands
-                - right_arm: np.ndarray (7,) - joint commands
+                - base_vel: np.ndarray (2,) - [linear_vel, angular_vel] (ABSOLUTE)
+                - left_arm: np.ndarray (7,) - joint DELTA commands (RELATIVE)
+                - right_arm: np.ndarray (7,) - joint DELTA commands (RELATIVE)
+
+        IMPORTANT: GR00T model outputs RELATIVE (delta) actions for arms!
+        We must convert: absolute_position = current_position + delta
 
         GR00T action format: [base_vel(2), left_arm(7), right_arm(7)]
         LeRobot action format: [left_arm(7), right_arm(7), linear_vel, angular_vel]
         """
-        # Apply safety limits to base velocity
+        # Apply safety limits to base velocity (ABSOLUTE values)
         base_vel = action["base_vel"].copy()
         base_vel[0] = np.clip(base_vel[0], -self.config.max_base_linear_vel, self.config.max_base_linear_vel)
         base_vel[1] = np.clip(base_vel[1], -self.config.max_base_angular_vel, self.config.max_base_angular_vel)
 
-        # Apply safety limits to arm joint positions
-        left_arm = action["left_arm"].copy()
-        right_arm = action["right_arm"].copy()
+        # Get arm action deltas (RELATIVE values from model)
+        left_arm_delta = action["left_arm"].copy()
+        right_arm_delta = action["right_arm"].copy()
 
-        # Clamp all joint positions to safe range
-        left_arm = np.clip(left_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
-        right_arm = np.clip(right_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+        # Convert RELATIVE (delta) actions to ABSOLUTE positions
+        # absolute_position = current_position + delta
+        if self._arm_positions_initialized:
+            left_arm = self._current_left_arm + left_arm_delta
+            right_arm = self._current_right_arm + right_arm_delta
+        else:
+            # If positions not yet initialized, treat as absolute (first frame)
+            logger.warning("Arm positions not initialized - using delta as absolute for first frame")
+            left_arm = left_arm_delta
+            right_arm = right_arm_delta
+
+        # Apply safety limits to ABSOLUTE joint positions
+        left_arm_clamped = np.clip(left_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
+        right_arm_clamped = np.clip(right_arm, -self.MAX_JOINT_POSITION, self.MAX_JOINT_POSITION)
 
         # Log if any values were clamped
-        if self.config.verbose or np.any(action["left_arm"] != left_arm) or np.any(action["right_arm"] != right_arm):
-            if np.any(action["left_arm"] != left_arm):
-                logger.warning(f"Left arm clamped: {action['left_arm']} -> {left_arm}")
-            if np.any(action["right_arm"] != right_arm):
-                logger.warning(f"Right arm clamped: {action['right_arm']} -> {right_arm}")
+        if np.any(left_arm != left_arm_clamped) or np.any(right_arm != right_arm_clamped):
+            if np.any(left_arm != left_arm_clamped):
+                logger.warning(f"Left arm clamped: {left_arm} -> {left_arm_clamped}")
+            if np.any(right_arm != right_arm_clamped):
+                logger.warning(f"Right arm clamped: {right_arm} -> {right_arm_clamped}")
+
+        left_arm = left_arm_clamped
+        right_arm = right_arm_clamped
+
+        # Update tracked positions (will be synced with actual robot state on next observation)
+        self._current_left_arm = left_arm.copy()
+        self._current_right_arm = right_arm.copy()
 
         if self.config.verbose:
             logger.debug(f"Sending action - base_vel: {base_vel}")
-            logger.debug(f"  left_arm: {left_arm}")
-            logger.debug(f"  right_arm: {right_arm}")
+            logger.debug(f"  left_arm delta: {left_arm_delta} -> absolute: {left_arm}")
+            logger.debug(f"  right_arm delta: {right_arm_delta} -> absolute: {right_arm}")
 
         if self.config.dry_run or self._use_mock:
             return
