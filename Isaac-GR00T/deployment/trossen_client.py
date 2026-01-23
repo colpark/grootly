@@ -557,13 +557,19 @@ class TrossenRobotInterface:
     MIN_ARM_POSITION = -1.5  # Min absolute position for arm joints
 
     # DELTA limits - maximum change per control step
-    MAX_DELTA_PER_STEP = 0.05  # Maximum change in radians per control step
+    # 0.02 rad/step at 30Hz = 0.6 rad/s max velocity (smooth, not jerky)
+    MAX_DELTA_PER_STEP = 0.02  # Maximum change in radians per control step
 
     # CRITICAL: Gripper (Motor 6) has VERY tight position limits!
     # Actual motor limits from error log: [-0.004, 0.044] radians
     MAX_GRIPPER_POSITION = 0.04  # Max gripper position (limit is 0.044)
     MIN_GRIPPER_POSITION = 0.0   # Min gripper position (limit is -0.004, use 0 for safety)
-    MAX_GRIPPER_DELTA = 0.005    # Slower gripper movement to avoid velocity issues
+    MAX_GRIPPER_DELTA = 0.002    # Slower gripper movement
+
+    # Exponential smoothing factor for noisy model outputs
+    # Lower = smoother but slower response, Higher = faster but jerkier
+    # 0.3 means: new_target = 0.3 * model_output + 0.7 * previous_target
+    SMOOTHING_ALPHA = 0.3
 
     def send_action(self, action: Dict[str, np.ndarray]):
         """
@@ -591,16 +597,31 @@ class TrossenRobotInterface:
         # NOTE: Despite modality config saying RELATIVE, the model appears to output
         # ABSOLUTE positions (values similar to current positions, not small deltas).
         # We treat them as ABSOLUTE to avoid position accumulation/explosion.
-        left_arm = action["left_arm"].copy()
-        right_arm = action["right_arm"].copy()
+        left_arm_raw = action["left_arm"].copy()
+        right_arm_raw = action["right_arm"].copy()
+
+        # SMOOTHING: Apply exponential moving average to filter noisy model outputs
+        # This prevents jerky motion from rapid target changes
+        if not hasattr(self, '_smoothed_left'):
+            # Initialize smoothed targets to current position on first call
+            self._smoothed_left = self._current_left_arm.copy()
+            self._smoothed_right = self._current_right_arm.copy()
+
+        # Exponential smoothing: smoothed = alpha * raw + (1-alpha) * prev_smoothed
+        self._smoothed_left = self.SMOOTHING_ALPHA * left_arm_raw + (1 - self.SMOOTHING_ALPHA) * self._smoothed_left
+        self._smoothed_right = self.SMOOTHING_ALPHA * right_arm_raw + (1 - self.SMOOTHING_ALPHA) * self._smoothed_right
+
+        # Use smoothed values as targets
+        left_arm = self._smoothed_left.copy()
+        right_arm = self._smoothed_right.copy()
 
         # Store current positions for logging (before we update them)
         prev_left = self._current_left_arm.copy()
         prev_right = self._current_right_arm.copy()
 
-        # VELOCITY LIMITING: Instead of absolute position limits, limit the CHANGE per step
+        # VELOCITY LIMITING: Limit the CHANGE per step
         # This prevents sudden jumps that exceed motor velocity limits
-        # Compute delta from current position to target
+        # Compute delta from current position to smoothed target
         left_delta = left_arm - prev_left
         right_delta = right_arm - prev_right
 
@@ -661,11 +682,13 @@ class TrossenRobotInterface:
             logger.info(f"Action #{self._action_count}:")
             logger.info(f"  prev_left:     {prev_left}")
             logger.info(f"  prev_right:    {prev_right}")
-            logger.info(f"  model_left:    {action['left_arm']}")
-            logger.info(f"  model_right:   {action['right_arm']}")
+            logger.info(f"  raw_left:      {left_arm_raw}")  # Raw model output
+            logger.info(f"  raw_right:     {right_arm_raw}")
+            logger.info(f"  smooth_left:   {self._smoothed_left}")  # After smoothing
+            logger.info(f"  smooth_right:  {self._smoothed_right}")
             logger.info(f"  delta_left:    {left_delta}")
             logger.info(f"  delta_right:   {right_delta}")
-            logger.info(f"  target_left:   {left_arm}")
+            logger.info(f"  target_left:   {left_arm}")  # Final clamped target
             logger.info(f"  target_right:  {right_arm}")
             logger.info(f"  base_vel:      {base_vel}")
 
