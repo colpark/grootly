@@ -12,7 +12,7 @@
 #
 # Environment Variables:
 #   SERVER_IP              - GPU server IP (default: 130.199.95.27)
-#   SERVER_PORT            - GPU server port (default: 5559)
+#   SERVER_PORT            - GPU server port (default: 5560)
 #   TASK_INSTRUCTION       - Task description
 #   LEFT_ARM_IP            - Left arm IP (default: 192.168.1.5)
 #   RIGHT_ARM_IP           - Right arm IP (default: 192.168.1.4)
@@ -24,16 +24,16 @@ set -e
 
 # Task-specific configuration
 TASK_NAME="ball2"
-TASK_INSTRUCTION="${TASK_INSTRUCTION:-Transfer the ball from one arm to the other}"
+TASK_INSTRUCTION="${TASK_INSTRUCTION:-Transfer the ball}"
 SERVER_IP="${SERVER_IP:-130.199.95.27}"
-SERVER_PORT="${SERVER_PORT:-5559}"
+SERVER_PORT="${SERVER_PORT:-5560}"
 
 # Robot hardware configuration
 LEFT_ARM_IP="${LEFT_ARM_IP:-192.168.1.5}"
 RIGHT_ARM_IP="${RIGHT_ARM_IP:-192.168.1.4}"
-CAM_HIGH_SERIAL="${CAM_HIGH_SERIAL:-130322274102}"
-CAM_LEFT_WRIST_SERIAL="${CAM_LEFT_WRIST_SERIAL:-130322271087}"
-CAM_RIGHT_WRIST_SERIAL="${CAM_RIGHT_WRIST_SERIAL:-130322270184}"
+CAM_HIGH_SERIAL="${CAM_HIGH_SERIAL:-130322271562}"
+CAM_LEFT_WRIST_SERIAL="${CAM_LEFT_WRIST_SERIAL:-130322272107}"
+CAM_RIGHT_WRIST_SERIAL="${CAM_RIGHT_WRIST_SERIAL:-130322273493}"
 
 echo "=============================================="
 echo "GR00T Client: Ball Transfer Task (Ball2)"
