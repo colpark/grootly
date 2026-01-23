@@ -72,9 +72,8 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 LEROBOT_AVAILABLE = False
 try:
-    from lerobot.common.robot_devices.robots.factory import make_robot
+    from lerobot.common.robot_devices.robots.utils import make_robot, make_robot_from_config
     from lerobot.common.robot_devices.robots.configs import TrossenAIMobileRobotConfig
-    from lerobot.common.robot_devices.cameras.configs import IntelRealSenseCameraConfig
     LEROBOT_AVAILABLE = True
     logger.info("LeRobot integration available")
 except ImportError as e:
@@ -200,31 +199,23 @@ class TrossenRobotInterface:
         if not LEROBOT_AVAILABLE:
             raise RuntimeError("LeRobot is not available. Install it first.")
 
-        robot_config = TrossenAIMobileRobotConfig(
-            robot_type="trossen_ai_mobile",
-            left_arm_ip_address=self.config.left_arm_ip,
-            right_arm_ip_address=self.config.right_arm_ip,
-            cameras={
-                "cam_high": IntelRealSenseCameraConfig(
-                    serial_number_or_name=self.config.cam_high_serial,
-                    width=self.config.camera_width,
-                    height=self.config.camera_height,
-                    fps=self.config.camera_fps,
-                ),
-                "cam_left_wrist": IntelRealSenseCameraConfig(
-                    serial_number_or_name=self.config.cam_left_wrist_serial,
-                    width=self.config.camera_width,
-                    height=self.config.camera_height,
-                    fps=self.config.camera_fps,
-                ),
-                "cam_right_wrist": IntelRealSenseCameraConfig(
-                    serial_number_or_name=self.config.cam_right_wrist_serial,
-                    width=self.config.camera_width,
-                    height=self.config.camera_height,
-                    fps=self.config.camera_fps,
-                ),
-            },
-        )
+        # Create config with mock mode if needed
+        robot_config = TrossenAIMobileRobotConfig(mock=self._use_mock)
+
+        # Update follower arm IPs if different from defaults
+        if self.config.left_arm_ip != "192.168.1.5":
+            robot_config.follower_arms["left"].ip = self.config.left_arm_ip
+        if self.config.right_arm_ip != "192.168.1.4":
+            robot_config.follower_arms["right"].ip = self.config.right_arm_ip
+
+        # Update camera serial numbers if different from defaults
+        if self.config.cam_high_serial != "130322274102":
+            robot_config.cameras["cam_high"].serial_number = int(self.config.cam_high_serial)
+        if self.config.cam_left_wrist_serial != "130322271087":
+            robot_config.cameras["cam_left_wrist"].serial_number = int(self.config.cam_left_wrist_serial)
+        if self.config.cam_right_wrist_serial != "130322270184":
+            robot_config.cameras["cam_right_wrist"].serial_number = int(self.config.cam_right_wrist_serial)
+
         return robot_config
 
     def connect(self) -> bool:
@@ -238,7 +229,7 @@ class TrossenRobotInterface:
 
         try:
             robot_config = self._create_robot_config()
-            self.robot = make_robot(robot_config)
+            self.robot = make_robot_from_config(robot_config)
             self.robot.connect()
             self.connected = True
             logger.info("Robot connected successfully")
@@ -270,46 +261,60 @@ class TrossenRobotInterface:
             Dict containing:
                 - cameras: Dict[str, np.ndarray] - camera images (H, W, 3) RGB
                 - state: np.ndarray - 19-DOF state vector
+
+        LeRobot TrossenAIMobile observation format:
+            - observation.state: torch.Tensor [left_arm(7), right_arm(7), base_state(5)]
+              where base_state = [odom_x, odom_y, odom_theta, linear_vel, angular_vel]
+            - observation.images.{cam_name}: torch.Tensor (H, W, 3)
+
+        GR00T expected state format (19-DOF):
+            [base_odom(3), base_vel(2), left_arm(7), right_arm(7)]
         """
         if self._use_mock:
             return self._get_mock_observation()
 
         # Get raw observation from LeRobot
-        obs = self.robot.get_observation()
+        obs = self.robot.capture_observation()
 
         # Extract camera images
         cameras = {}
         for cam_name in self.CAMERA_NAMES:
-            if cam_name in obs:
-                image = obs[cam_name]
-                # Convert BGR to RGB if needed (LeRobot returns BGR)
+            obs_key = f"observation.images.{cam_name}"
+            if obs_key in obs:
+                image = obs[obs_key]
+                # Convert torch tensor to numpy if needed
+                if hasattr(image, 'numpy'):
+                    image = image.numpy()
+                # Ensure uint8 format
+                if image.dtype != np.uint8:
+                    image = image.astype(np.uint8)
+                # Convert BGR to RGB if needed (LeRobot may return BGR)
                 if image.shape[-1] == 3:
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 cameras[cam_name] = image
             else:
-                logger.warning(f"Camera {cam_name} not found in observation")
+                logger.warning(f"Camera {cam_name} not found in observation (key: {obs_key})")
                 cameras[cam_name] = np.zeros((self.config.camera_height, self.config.camera_width, 3), dtype=np.uint8)
 
-        # Build 19-DOF state vector
+        # Parse LeRobot state: [left_arm(7), right_arm(7), base_state(5)]
+        raw_state = obs.get("observation.state")
+        if hasattr(raw_state, 'numpy'):
+            raw_state = raw_state.numpy()
+
+        # Remap to GR00T format: [base_odom(3), base_vel(2), left_arm(7), right_arm(7)]
         state = np.zeros(19, dtype=np.float32)
 
-        # Base odometry (indices 0-2): odom_x, odom_y, odom_theta
-        # Note: These may not be available on all configurations
-        state[0] = obs.get("base_odom_x", 0.0)
-        state[1] = obs.get("base_odom_y", 0.0)
-        state[2] = obs.get("base_odom_theta", 0.0)
+        if raw_state is not None and len(raw_state) >= 19:
+            # LeRobot format: [left_arm(7), right_arm(7), odom_x, odom_y, odom_theta, linear_vel, angular_vel]
+            left_arm = raw_state[0:7]      # indices 0-6
+            right_arm = raw_state[7:14]    # indices 7-13
+            base_state = raw_state[14:19]  # indices 14-18: [odom_x, odom_y, odom_theta, linear_vel, angular_vel]
 
-        # Base velocity (indices 3-4): linear_vel, angular_vel
-        state[3] = obs.get("base_linear_vel", 0.0)
-        state[4] = obs.get("base_angular_vel", 0.0)
-
-        # Left arm joints (indices 5-11)
-        for i, joint_key in enumerate(self.LEFT_ARM_JOINTS):
-            state[5 + i] = obs.get(joint_key, 0.0)
-
-        # Right arm joints (indices 12-18)
-        for i, joint_key in enumerate(self.RIGHT_ARM_JOINTS):
-            state[12 + i] = obs.get(joint_key, 0.0)
+            # GR00T format: [base_odom(3), base_vel(2), left_arm(7), right_arm(7)]
+            state[0:3] = base_state[0:3]   # odom_x, odom_y, odom_theta
+            state[3:5] = base_state[3:5]   # linear_vel, angular_vel
+            state[5:12] = left_arm         # left arm joints
+            state[12:19] = right_arm       # right arm joints
 
         if self.config.verbose:
             logger.debug(f"State: base_odom={state[0:3]}, base_vel={state[3:5]}")
@@ -336,6 +341,9 @@ class TrossenRobotInterface:
                 - base_vel: np.ndarray (2,) - [linear_vel, angular_vel]
                 - left_arm: np.ndarray (7,) - joint commands
                 - right_arm: np.ndarray (7,) - joint commands
+
+        GR00T action format: [base_vel(2), left_arm(7), right_arm(7)]
+        LeRobot action format: [left_arm(7), right_arm(7), linear_vel, angular_vel]
         """
         # Apply safety limits to base velocity
         base_vel = action["base_vel"].copy()
@@ -350,24 +358,22 @@ class TrossenRobotInterface:
         if self.config.dry_run or self._use_mock:
             return
 
-        # Build action dict for LeRobot
-        action_dict = {}
-
-        # Base velocity commands
-        action_dict["base_linear_vel"] = float(base_vel[0])
-        action_dict["base_angular_vel"] = float(base_vel[1])
-
-        # Left arm joint commands
-        for i, joint_key in enumerate(self.LEFT_ARM_ACTION_KEYS):
-            action_dict[joint_key] = float(action["left_arm"][i])
-
-        # Right arm joint commands
-        for i, joint_key in enumerate(self.RIGHT_ARM_ACTION_KEYS):
-            action_dict[joint_key] = float(action["right_arm"][i])
+        # Convert GR00T format to LeRobot format
+        # GR00T: [base_vel(2), left_arm(7), right_arm(7)]
+        # LeRobot: [left_arm(7), right_arm(7), linear_vel, angular_vel]
+        import torch
+        lerobot_action = torch.tensor(
+            np.concatenate([
+                action["left_arm"],    # 7 joints
+                action["right_arm"],   # 7 joints
+                base_vel,              # [linear_vel, angular_vel]
+            ]),
+            dtype=torch.float32
+        )
 
         # Send to robot
         try:
-            self.robot.send_action(action_dict)
+            self.robot.send_action(lerobot_action)
         except Exception as e:
             logger.error(f"Failed to send action: {e}")
 
