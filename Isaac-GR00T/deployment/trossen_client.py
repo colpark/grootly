@@ -83,6 +83,195 @@ except ImportError as e:
     logger.warning("Running in mock mode - install lerobot for real robot control")
 
 
+# =============================================================================
+# Trajectory Logger - Records and plots joint trajectories on exit
+# =============================================================================
+class TrajectoryLogger:
+    """Logs joint trajectories and generates plots on exit (including Ctrl+C)."""
+
+    def __init__(self, save_dir: str = "deployment"):
+        self.save_dir = save_dir
+        self.timestamps = []
+        self.prev_left = []
+        self.prev_right = []
+        self.model_left = []
+        self.model_right = []
+        self.target_left = []
+        self.target_right = []
+        self.base_vel = []
+        self.start_time = time.time()
+
+    def log(self, prev_left, prev_right, model_left, model_right, target_left, target_right, base_vel):
+        """Log one timestep of trajectory data."""
+        self.timestamps.append(time.time() - self.start_time)
+        self.prev_left.append(prev_left.copy())
+        self.prev_right.append(prev_right.copy())
+        self.model_left.append(model_left.copy())
+        self.model_right.append(model_right.copy())
+        self.target_left.append(target_left.copy())
+        self.target_right.append(target_right.copy())
+        self.base_vel.append(base_vel.copy())
+
+    def save_and_plot(self):
+        """Save trajectory data and generate plots."""
+        if len(self.timestamps) == 0:
+            logger.info("No trajectory data to save")
+            return
+
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        from datetime import datetime
+
+        # Convert to numpy arrays
+        timestamps = np.array(self.timestamps)
+        prev_left = np.array(self.prev_left)
+        prev_right = np.array(self.prev_right)
+        model_left = np.array(self.model_left)
+        model_right = np.array(self.model_right)
+        target_left = np.array(self.target_left)
+        target_right = np.array(self.target_right)
+
+        # Save raw data
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        data_file = f"{self.save_dir}/trajectory_{timestamp_str}.npz"
+        np.savez(data_file,
+                 timestamps=timestamps,
+                 prev_left=prev_left, prev_right=prev_right,
+                 model_left=model_left, model_right=model_right,
+                 target_left=target_left, target_right=target_right)
+        logger.info(f"Saved trajectory data: {data_file}")
+
+        # Generate plot
+        joint_names = ['J0 (waist)', 'J1 (shoulder)', 'J2 (elbow)', 'J3 (forearm)', 'J4 (wrist1)', 'J5 (wrist2)', 'J6 (gripper)']
+
+        fig, axes = plt.subplots(4, 2, figsize=(16, 20))
+        fig.suptitle(f'Joint Trajectories ({len(timestamps)} steps, {timestamps[-1]:.1f}s)\nGenerated: {timestamp_str}', fontsize=14, fontweight='bold')
+
+        # Plot 1: Left arm all joints - target positions
+        ax = axes[0, 0]
+        for j in range(7):
+            ax.plot(timestamps, target_left[:, j], '-', label=joint_names[j], alpha=0.8)
+        ax.axhline(y=1.5, color='r', linestyle='--', alpha=0.5, label='Position limit')
+        ax.axhline(y=-1.5, color='r', linestyle='--', alpha=0.5)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Position (rad)')
+        ax.set_title('LEFT ARM: Target Positions Sent to Robot')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Plot 2: Right arm all joints - target positions
+        ax = axes[0, 1]
+        for j in range(7):
+            ax.plot(timestamps, target_right[:, j], '-', label=joint_names[j], alpha=0.8)
+        ax.axhline(y=1.5, color='r', linestyle='--', alpha=0.5, label='Position limit')
+        ax.axhline(y=-1.5, color='r', linestyle='--', alpha=0.5)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Position (rad)')
+        ax.set_title('RIGHT ARM: Target Positions Sent to Robot')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Plot 3: Left arm - Model vs Target for key joints
+        ax = axes[1, 0]
+        for j in [0, 1, 3]:  # waist, shoulder, forearm
+            ax.plot(timestamps, model_left[:, j], '--', label=f'{joint_names[j]} (model)', alpha=0.6)
+            ax.plot(timestamps, target_left[:, j], '-', label=f'{joint_names[j]} (target)', alpha=0.8)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Position (rad)')
+        ax.set_title('LEFT ARM: Model Output vs Clamped Target')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # Plot 4: Right arm - Model vs Target for key joints
+        ax = axes[1, 1]
+        for j in [0, 1, 3]:
+            ax.plot(timestamps, model_right[:, j], '--', label=f'{joint_names[j]} (model)', alpha=0.6)
+            ax.plot(timestamps, target_right[:, j], '-', label=f'{joint_names[j]} (target)', alpha=0.8)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Position (rad)')
+        ax.set_title('RIGHT ARM: Model Output vs Clamped Target')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # Plot 5: Grippers
+        ax = axes[2, 0]
+        ax.plot(timestamps, model_left[:, 6], 'r--', label='Left model', alpha=0.6)
+        ax.plot(timestamps, target_left[:, 6], 'r-', label='Left target', linewidth=2)
+        ax.plot(timestamps, model_right[:, 6], 'b--', label='Right model', alpha=0.6)
+        ax.plot(timestamps, target_right[:, 6], 'b-', label='Right target', linewidth=2)
+        ax.axhline(y=0.04, color='orange', linestyle=':', label='Gripper limit (0.04)')
+        ax.axhline(y=0, color='orange', linestyle=':')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Position (rad)')
+        ax.set_title('GRIPPERS: Model vs Target')
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+
+        # Plot 6: Position deltas (how much changed per step)
+        ax = axes[2, 1]
+        if len(timestamps) > 1:
+            delta_left = np.diff(target_left, axis=0)
+            delta_right = np.diff(target_right, axis=0)
+            for j in range(6):
+                ax.plot(timestamps[1:], delta_left[:, j], '-', label=f'L-{joint_names[j][:2]}', alpha=0.6)
+            ax.axhline(y=0.05, color='r', linestyle='--', label='Delta limit')
+            ax.axhline(y=-0.05, color='r', linestyle='--')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Delta (rad/step)')
+        ax.set_title('LEFT ARM: Position Changes Per Step')
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # Plot 7: Max absolute position over time
+        ax = axes[3, 0]
+        max_left = np.max(np.abs(target_left[:, :6]), axis=1)
+        max_right = np.max(np.abs(target_right[:, :6]), axis=1)
+        ax.plot(timestamps, max_left, 'r-', label='Left arm max |pos|', linewidth=2)
+        ax.plot(timestamps, max_right, 'b-', label='Right arm max |pos|', linewidth=2)
+        ax.axhline(y=1.5, color='orange', linestyle='--', linewidth=2, label='Limit (1.5 rad)')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Max |Position| (rad)')
+        ax.set_title('Maximum Absolute Position (Safety Check)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Plot 8: Base velocity
+        ax = axes[3, 1]
+        base_vel = np.array(self.base_vel)
+        ax.plot(timestamps, base_vel[:, 0], 'g-', label='Linear vel', linewidth=2)
+        ax.plot(timestamps, base_vel[:, 1], 'm-', label='Angular vel', linewidth=2)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Velocity')
+        ax.set_title('BASE VELOCITY')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plot_file = f"{self.save_dir}/trajectory_{timestamp_str}.png"
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Saved trajectory plot: {plot_file}")
+
+        # Print summary
+        logger.info(f"Trajectory summary:")
+        logger.info(f"  Duration: {timestamps[-1]:.1f}s, Steps: {len(timestamps)}")
+        logger.info(f"  Left arm max position: {np.max(np.abs(target_left[:, :6])):.3f} rad")
+        logger.info(f"  Right arm max position: {np.max(np.abs(target_right[:, :6])):.3f} rad")
+
+
+# Global trajectory logger instance
+_trajectory_logger: Optional['TrajectoryLogger'] = None
+
+
+def get_trajectory_logger() -> TrajectoryLogger:
+    """Get or create the global trajectory logger."""
+    global _trajectory_logger
+    if _trajectory_logger is None:
+        _trajectory_logger = TrajectoryLogger()
+    return _trajectory_logger
+
+
 @dataclass
 class ClientConfig:
     """Configuration for the Trossen robot client."""
@@ -451,6 +640,18 @@ class TrossenRobotInterface:
         self._current_left_arm = left_arm.copy()
         self._current_right_arm = right_arm.copy()
 
+        # Log trajectory data for plotting (even on abort)
+        trajectory_logger = get_trajectory_logger()
+        trajectory_logger.log(
+            prev_left=prev_left,
+            prev_right=prev_right,
+            model_left=action["left_arm"],
+            model_right=action["right_arm"],
+            target_left=left_arm,
+            target_right=right_arm,
+            base_vel=base_vel
+        )
+
         # ALWAYS log first few actions to help debug issues
         if not hasattr(self, '_action_count'):
             self._action_count = 0
@@ -581,6 +782,13 @@ def run_control_loop(
             logger.info(f"Total steps: {step_count}")
             logger.info(f"Avg inference time: {np.mean(inference_times)*1000:.1f}ms")
             logger.info(f"Max inference time: {np.max(inference_times)*1000:.1f}ms")
+
+        # Save trajectory data and generate plot (works even on Ctrl+C abort)
+        try:
+            trajectory_logger = get_trajectory_logger()
+            trajectory_logger.save_and_plot()
+        except Exception as e:
+            logger.error(f"Failed to save trajectory: {e}")
 
 
 def test_connection(client: PolicyClient) -> bool:
